@@ -1,19 +1,17 @@
-"""Thin wrapper over dateparser: the backend reads the text; the caller's classification (kind, anchor, direction)
-decides what shape the answer takes. Gaps are filled by named rules and recorded; only a choice with no evidence
-either way (the day/month order of 01/02/2026) is asked."""
+"""A contract layer over Duckling (https://github.com/facebook/duckling): Duckling reads the phrase; this module
+only shapes its answer the way the caller's labels ask, refuses what does not fit, asks when the day/month order is
+genuinely open, and records how the answer was obtained. It parses nothing itself."""
 
-import re
-from calendar import month_abbr, month_name, monthrange
+import json
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import fields
-from datetime import date, datetime, time, timedelta
-from fractions import Fraction
-from importlib.metadata import version
+from datetime import date, datetime, time, timedelta, timezone
 
-from dateparser.date import DateDataParser
 from dateutil.relativedelta import relativedelta
-from text_to_num import alpha2digit
 
-from . import forms
 from .models import (
     ANCHORS,
     DIRECTIONS,
@@ -30,75 +28,20 @@ from .models import (
     TemporalReadResult,
 )
 
-MAX_INPUT_CHARS = 512  # ponytail: guards dateparser's regexes against huge input; raise if real spans need it
-BACKEND = f"dateparser {version('dateparser')}"
-# The parts an absolute expression of each kind needs. Missing ones are filled by rule, see _fill.
-REQUIRED_PARTS = {"date": ["year", "month", "day"], "period": ["year"]}
-PARTS = ("year", "month", "day")
-# Which parts did the text give? Parse it against two unrelated (leap-year) bases: a part that changes with the base
-# was filled in by dateparser, not written. (dateparser's own REQUIRE_PARTS can misread: "March 15" -> March 2015.)
-PROBE_BASES = (datetime(2004, 3, 10), datetime(2012, 8, 23))
-# dateparser reads "3 months" as a date that long ago. A duration is measured back from two fixed dates, never the
-# session's: a true quantity is the same from both; "two months and five days" is not (66 days, then 64).
-DURATION_BASES = (datetime(2000, 1, 15), datetime(2001, 3, 20))
-# Proposed defaults (2026-10-27) for settings the session leaves unset; applied ones are listed in provenance.defaults.
-DEFAULTS = {"week_start": "monday", "month_overflow": "clamp"}  # ISO 8601 weeks; dateparser's own month arithmetic
-WEEK_START_DAY = {"monday": 0, "sunday": 6}
-YEAR_FIRST = re.compile(r"\d{4}[-/.]")  # 2026-02-01: its shape fixes the order, no date_order applies
-NUMERIC_PAIR = re.compile(  # 01/02, 26.10.2026, "01 02 2026", "1,2,2026": day/month order matters; not "1.5 years"
-    r"(?<![\d:])\d{1,2}(?:\s*[-/.,]\s*|\s+)\d{1,2}(?![\d:])(?!\s*(?:second|minute|hour|day|week|fortnight|month|quarter|year)s?\b)",
-    re.IGNORECASE)
+MAX_INPUT_CHARS = 512  # one phrase, not a document
+DUCKLING_URL = os.environ.get("DATEPHRASE_DUCKLING_URL", "http://127.0.0.1:8000/parse")
+LOCALES = {"MDY": "en_US", "DMY": "en_GB", "YMD": "en_US"}  # year-first dates read alike in both
+GRAINS = ("week", "month", "quarter", "year")  # a time at one of these grains is a whole period
+MONTHS_IN = {"month": 1, "quarter": 3, "year": 12}
+MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+               "November", "December")  # not strftime: that follows the host's locale
+# Two unrelated reference dates: a value that changes in year, month and day between them names no date of its own
+PROBES = (datetime(2004, 3, 10, tzinfo=timezone.utc), datetime(2012, 8, 23, tzinfo=timezone.utc))
 CONTEXT_FIELDS = {f.name for f in fields(TemporalContext)}
-SEARCH_LIMIT = 12 * 8  # months scanned for a next occurrence: covers February 29 (next leap year)
-WEEKDAY = r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues|tue|wed|thurs|thur|thu|fri|sat|sun"
-# "next Monday" is not read by dateparser; "Monday" is, and "next" / "last" say which one
-RELATIVE_WEEKDAY = re.compile(rf"(next|coming|this|last|previous) ((?:{WEEKDAY})\.?)", re.IGNORECASE)
-WEEKDAY_DIRECTION = {"next": "future", "coming": "future", "this": None, "last": "past", "previous": "past"}
-# Lengths dateparser does not read, said in the units it does. A quarter is 3 months (converted back, see _QUARTERS).
-UNIT_WORD = r"(?:second|minute|hour|day|week|fortnight|month|quarter|year)s?\b"
-COUNT = r"(?<![\d.])(\d+(?:\.\d+)?)"  # a whole count: never the "5" of "1.5"
-LENGTH_WORDS = (
-    (re.compile(r"\bhalf (?:a |an )?year\b", re.IGNORECASE), lambda m: "6 months"),
-    (re.compile(r"\b(?:a )?couple(?: of)?\b", re.IGNORECASE), lambda m: "2"),
-    (re.compile(rf"\b(?:a|an) (?={UNIT_WORD})", re.IGNORECASE), lambda m: "1 "),  # "a week" -> "1 week"
-    (re.compile(rf"{COUNT} fortnights?\b", re.IGNORECASE), lambda m: f"{_times(m[1], 2)} weeks"),
-    (re.compile(rf"{COUNT} quarters?\b(?![\s-]+of\b)", re.IGNORECASE), lambda m: f"{_times(m[1], 3)} months"),  # not "of an hour"
-)
-# A duration keeps the unit it was written in, down to seconds (dateparser reports them as part of a day)
-TIME_UNITS = {"hour": 3_600_000_000, "minute": 60_000_000, "second": 1_000_000}
-# dateparser reads "1.5 days" right, but takes "1.5 years" for January 5: fractional months and years are not read
-FRACTIONAL_MONTHS = re.compile(r"\d*\.\d+ (?:month|quarter|year)s?\b", re.IGNORECASE)  # after unit spelling
-# Units as people write them, attached or not ("90 mins", "1.50hours", "1.5-year", ".5 yr"), spelled out in full
-UNIT_SPELLINGS = {
-    "second": ("seconds", "second", "secs", "sec", "s"), "minute": ("minutes", "minute", "mins", "min", "m"),
-    "hour": ("hours", "hour", "hrs", "hr", "h"), "day": ("days", "day", "d"),
-    "week": ("weeks", "week", "wks", "wk", "w"), "fortnight": ("fortnights", "fortnight"),
-    "month": ("months", "month", "mos", "mo"), "quarter": ("quarters", "quarter", "qtrs", "qtr"),
-    "year": ("years", "year", "yrs", "yr", "y"),  # one letter as dateparser reads it: "90m" is minutes, "5y" years
-}
-UNIT_OF = {spelling: unit for unit, spellings in UNIT_SPELLINGS.items() for spelling in spellings}
-_WORDS = "|".join(sorted((u for u in UNIT_OF if len(u) > 1), key=len, reverse=True))
-_LETTERS = "".join(u for u in UNIT_OF if len(u) == 1)
-NUMBER_AND_UNIT = re.compile(  # "90 mins", "2-week", "1.50hours"; one letter only right after its number: "90m", "1h30m"
-    rf"(?<![\d.])(\d*\.\d+|\d+)(?:\s*-?\s*({_WORDS})|([{_LETTERS}]))(?![a-z])", re.IGNORECASE)
-TIME_UNIT = re.compile(r"\b(hour|minute|second)s?\b", re.IGNORECASE)
-# "second" is a unit of time as well as an ordinal: text2num would turn "in a second" into "in a 2nd". It is read
-# once the other numbers are digits: "seconds" is the unit; "second" is the unit right after a count ("a second",
-# "2 second", "twenty two second" -> "22 second"), the ordinal otherwise ("the second", "second May"). After a
-# round ten in a date ("October twenty second") it ends the ordinal: 22nd.
-SECOND = re.compile(r"(?<!-)\bseconds?\b", re.IGNORECASE)  # "twenty-second" is left to text2num: 22nd
-COUNTED = re.compile(r"(?:\b(?:a|an|per|each|every)|(?<![\w.])(\d*\.?\d+))\s*$", re.IGNORECASE)
-MONTH_WORD = re.compile(rf"\b(?:{'|'.join(m.lower() for m in month_name[1:] + month_abbr[1:])})\b", re.IGNORECASE)
-# One written day ("the 1st", "October 26th"): dateparser misreads some ("1st of the month" -> the 27th)
-# not "the 2nd day from now", a count; but "the 2nd day of the month" is a day
-ORDINAL_DAY = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)\b(?!\s*{UNIT_WORD}(?!\s+of\b))", re.IGNORECASE)
-# a duration is a run of "<number> <unit>": "3 days", "1 year 2 months", "3 weeks and 2 days", "2 hours ago"
-DURATION_SHAPE = re.compile(
-    r"(?:for )?(?:\d*\.?\d+ (?:second|minute|hour|day|week|month|year)s?(?:,? and |, ?| )?)+(?: ago)?", re.IGNORECASE)
-# a whole phrase that is one day of the month: "the 15th", "15th of the month", "the 1st at noon"
-# ("the 15th of this month" names its month: a day of that period, read by the forms)
-LONE_DAY = re.compile(r"(?:the )?(\d{1,2})(?:st|nd|rd|th)(?: of the month)?(?:,? at (.+))?", re.IGNORECASE)
-_QUARTERS = re.compile(r"\bquarters?\b(?![\s-]+of\b)", re.IGNORECASE)
+
+
+class EngineUnavailable(RuntimeError):
+    """Duckling could not be reached: a deployment problem, never a statement about the text."""
 
 
 def read_temporal(
@@ -111,11 +54,10 @@ def read_temporal(
     answers: dict | None = None,
     origin_offset: int = 0,
 ) -> TemporalReadResult:
-    """Read one candidate expression (not a whole prompt) with dateparser, English only.
+    """Read one phrase holding one date (the caller's promise) through Duckling.
 
-    kind (date | period | duration), anchor (absolute | relative) and, for a relative one, direction
-    (past | future; future when not sent) come from the upstream classifier.
-    answers holds the user's replies to earlier questions; `answer()` fills it for you."""
+    kind (date | period | duration), anchor (absolute | relative) and, for a relative one, direction (past | future)
+    are the caller's classification. answers holds the user's replies to earlier questions (`answer()` fills it)."""
     if not isinstance(text, str):
         raise TypeError(f"text must be str, got {type(text).__name__}")
     if context is None:
@@ -137,186 +79,65 @@ def read_temporal(
         raise TemporalConfigError(f"unknown answer fields: {sorted(unknown)}")
 
     request = Request(text, context, kind, anchor, answers, origin_offset, direction)
-    ctx = TemporalContext.from_dict(context.to_dict() | answers)  # validates the replies like any setting
+    ctx = TemporalContext.from_dict(context.to_dict() | answers)
     stripped = text.strip()
     start = origin_offset + len(text) - len(text.lstrip())
     source = Source(stripped, start, start + len(stripped))
-    ref, ref_source = (ctx.reference_date, "session") if ctx.reference_date else (_today(), "system_clock")
-    normalized = " ".join(stripped.split())  # "a  week", "a\tweek"
-    phrase, text_direction, quarters, too_big = "", None, False, False
-    if len(stripped) <= MAX_INPUT_CHARS:  # measured on the text as given, before any rewrite or form
-        try:
-            phrase, text_direction, quarters = _rewrite(normalized, kind) if kind else (normalized, None, False)
-        except (ValueError, OverflowError):  # a number too big to rewrite or to count in any unit
-            too_big = True
-    quarters = quarters and kind == "duration"  # said in quarters ("one quarter", "2 qtrs"): the answer stays so
-    labelled, defaults, policies = direction, [], {}
-    if text_direction:  # "last Friday": the text says which one ("this Friday" does not: the label decides)
-        direction = text_direction
-    elif anchor == "relative" and direction is None:  # decided 2026-10-27: a relative date without a label is future
-        direction = "future"
-        defaults.append("direction:future")
-
-    settings = {"PREFER_LOCALE_DATE_ORDER": False}
-    if YEAR_FIRST.match(phrase):
-        settings["DATE_ORDER"] = "YMD"
-    elif ctx.date_order:
-        settings["DATE_ORDER"] = ctx.date_order
-    if direction:
-        settings["PREFER_DATES_FROM"] = direction
-    probing = anchor == "absolute" and kind in REQUIRED_PARTS
-    if kind == "duration":
-        settings["RELATIVE_BASE"] = DURATION_BASES[0]
-    elif probing:
-        settings["RELATIVE_BASE"] = PROBE_BASES[0]
-    else:
-        settings["RELATIVE_BASE"] = datetime.combine(ref, time())
-    uses_ref = kind != "duration" and not probing
-    filled, form = [], None
+    phrase = " ".join(stripped.split()).rstrip(".,;")
+    ref_date, ref_source = (ctx.reference_date, "session") if ctx.reference_date else (_today(), "system_clock")
+    ref = datetime.combine(ref_date, time(), tzinfo=timezone.utc)
+    dims = ["duration"] if kind == "duration" else ["time"] if kind else ["time", "duration"]
+    locales = [LOCALES[ctx.date_order]] if ctx.date_order else ["en_US", "en_GB"]
+    defaults, policies, read = [], {}, {}
 
     def provenance():
-        return Provenance(BACKEND, _jsonable(settings), ref if uses_ref else None, ref_source if uses_ref else None,
-                          kind, anchor, labelled, tuple(filled), tuple(defaults), dict(policies),
-                          phrase if phrase != stripped else None, form)
+        return Provenance("duckling", {"url": DUCKLING_URL, "locales": locales, "dims": dims, "tz": "UTC"},
+                          ref_date, ref_source, kind, anchor, direction, tuple(defaults), dict(policies),
+                          read.get("body"), read.get("engine", {}))
 
-    def done(status, value=None, reason=None, data=None):
-        return TemporalReadResult(status, source, provenance(), request, value=value, reason=reason,
-                                  period=data and data.period, locale=data and data.locale)
+    def done(status, value=None, reason=None):
+        return TemporalReadResult(status, source, provenance(), request, value=value, reason=reason)
 
-    def setting(name):
-        if value := getattr(ctx, name):
-            policies[name] = value
-            return value
-        defaults.append(f"{name}:{DEFAULTS[name]}")
-        policies[name] = DEFAULTS[name]
-        return DEFAULTS[name]
-
-    if len(stripped) > MAX_INPUT_CHARS:  # before the forms too: they read nested periods ("last week of" * n)
-        return done("not_temporal", reason="TOO_LONG")
-    if too_big:
-        return done("not_temporal", reason="OUT_OF_RANGE")
-    if FRACTIONAL_MONTHS.search(phrase):
-        return done("not_temporal", reason="FRACTION_NOT_SUPPORTED")
-
-    # A day alone ("the 1st", "the 15th of the month", "the 15th at noon"): that day at its next occurrence (its
-    # latest one when past). dateparser cannot be trusted with it: it reads "the 1st" ... "the 12th" as months.
-    if kind != "duration" and (lone := LONE_DAY.fullmatch(phrase)):
-        if kind == "period":
-            return done("not_temporal", reason="KIND_MISMATCH")  # a day is not a period
-        at = time()
-        if lone[2]:
-            clock = _parse(lone[2], {"PREFER_LOCALE_DATE_ORDER": False, "RELATIVE_BASE": datetime.combine(ref, time())})
-            if clock is None:
-                return done("not_temporal")
-            at = clock.date_obj.time()
-        try:
-            d = _fill({"day": int(lone[1])}, ref, past=direction == "past")
-        except ValueError:  # no month has that day ("the 32nd")
-            return done("not_temporal", reason="OUT_OF_RANGE")
-        filled += ["year", "month"]
-        uses_ref = True
-        return done("resolved", DateValue(d, datetime.combine(d, at)))
-
-    # Quarters, numbered weeks, "year to date", weekends, "the end of the month": built on dateparser (forms.py)
-    if kind != "duration":
-        def read_period(t):
-            r = read_temporal(t.lstrip(", "), context=ctx, kind="period", anchor=anchor, direction=labelled)
-            if r.status != "resolved":
-                raise forms.PeriodNotRead(r.reason or "PERIOD_NOT_READ")
-            policies.update(r.provenance.policies)  # what the period used is what this answer used
-            defaults.extend(d for d in r.provenance.defaults if d not in defaults)
-            filled.extend(p for p in r.provenance.filled if p not in filled)  # "beginning of October": its year
-            return r.value
-        try:
-            found = forms.read(phrase, ref=ref, direction=direction, week_start=lambda: setting("week_start"),
-                               read_period=read_period)
-        except (ValueError, OverflowError):  # week 53 of a 52-week year, beyond year 9999
-            return done("not_temporal", reason="OUT_OF_RANGE")
-        except forms.PeriodNotRead as refused:  # "the second day of next year" labelled absolute: refused whole
-            return done("not_temporal", reason=refused.reason)
-        if found:
-            value, form, form_filled, form_relative = found
-            if anchor == "absolute" and form_relative:  # "next quarter", "this weekend": counted from today
-                return done("not_temporal", reason="ANCHOR_MISMATCH")
-            filled += form_filled
-            uses_ref = True
-            if kind and value.kind != kind:
-                return done("not_temporal", reason="KIND_MISMATCH")
-            if labelled and value.kind == "date" and (value.date < ref if labelled == "future" else value.date > ref):
-                return done("not_temporal", reason="DIRECTION_MISMATCH")
-            return done("resolved", value)
-
-    # Day/month order: keep only the readings whose day and month come from the text. "03/15" read day first makes
-    # dateparser take 15 as a year and invent the month, so it is dropped. Two real, different readings are asked.
-    if "DATE_ORDER" not in settings and kind != "duration" and NUMERIC_PAIR.search(phrase):
-        real = [o for o in ("MDY", "DMY") if _written(phrase, settings | {"DATE_ORDER": o}, ("month", "day"))]
-        readings = {o: _parse(phrase, settings | {"DATE_ORDER": o}) for o in real}
-        if len({r.date_obj.date() for r in readings.values()}) > 1:
-            # what each answer would give, with every other rule and label applied
-            outcomes = {o: read_temporal(text, context=context, kind=kind, anchor=anchor, direction=labelled,
-                                         answers=answers | {"date_order": o}, origin_offset=origin_offset)
-                        for o in real}
-            usable = [o for o in real if outcomes[o].status == "resolved"]
-            if not usable:  # both answers are refused anyway: no question, the refusal
-                return done("not_temporal", reason=outcomes[real[0]].reason)
-            if len(usable) == 2:
-                options = [(o, _label(outcomes[o], o)) for o in real]
-                question = f"Does '{stripped}' mean {options[0][1]} or {options[1][1]}?"
-                return TemporalReadResult("ask", source, provenance(), request, reason="DATE_ORDER_AMBIGUOUS",
-                                          question=Question("DATE_ORDER_AMBIGUOUS", "date_order", question,
-                                                            "choice", tuple(options)))
-            real = usable  # only one answer fits the labels: no question
-        if len(real) == 1:
-            settings["DATE_ORDER"] = real[0]
-
-    data = _parse(phrase, settings)
-    if data is None:
+    if not phrase:
         return done("not_temporal")
-    moment = data.date_obj
-    try:
-        a, b = _probe(phrase, settings) if probing else (None, None)
-        varying = [p for p in PARTS if a and b and getattr(a.date_obj, p) != getattr(b.date_obj, p)]
-        if len(varying) == len(PARTS):  # "tomorrow" labelled absolute: the text gave no part of a date itself
-            return done("not_temporal", reason="ANCHOR_MISMATCH", data=data)
-        if missing := [p for p in REQUIRED_PARTS.get(kind, ()) if p in varying]:
-            # decided 2026-10-27: a missing day is the 1st; a missing year or month is the next occurrence after
-            # the reference date (March 15 on 2026-10-27 is 2027-03-15)
-            known = {p: getattr(moment, p) for p in PARTS if p not in missing}
-            if kind == "period":
-                known["day"] = 1  # a period starts on the 1st: never the probe's day, which would move the cutoff
-            moment = datetime.combine(_fill(known, ref), moment.time())
-            filled += missing
-            uses_ref = any(p != "day" for p in missing)
+    if len(stripped) > MAX_INPUT_CHARS:
+        return done("not_temporal", reason="TOO_LONG")
 
-        d = moment.date()
-        if anchor == "relative" and kind == "date" and data.period in ("month", "year") and d.day < ref.day \
-                and d.day == monthrange(d.year, d.month)[1]:  # dateparser moved the day back: the month is too short
-            if setting("month_overflow") == "reject":
-                return done("not_temporal", reason="MONTH_OVERFLOW_REJECTED", data=data)
-        if kind == "period":
-            value = _whole_period(d, data.period, setting("week_start") if data.period == "week" else None)
-        elif kind == "duration":
-            length = re.sub(r"\s*&\s*", " and ", phrase).rstrip(". ")  # "3 days & 2 hours", "3 days."
-            if not DURATION_SHAPE.fullmatch(length):  # "tomorrow", "yesterday at 12:00": a date, not a length
-                return done("not_temporal", reason="KIND_MISMATCH", data=data)
-            value, reason = _duration(length, settings, data.period)
-            if value is None:
-                return done("not_temporal", reason=reason, data=data)
-            if quarters and value.unit == "month" and value.quantity % 3 == 0:  # said in quarters: kept in quarters
-                q = Fraction(value.quantity) / 3
-                value = DurationValue(int(q) if q.denominator == 1 else float(q), "quarter")
+    # Each locale's reading of the WHOLE phrase. Duckling also reads parts ("the year 2027" as "the year"): a part
+    # is not the phrase, so it never counts.
+    readings = {loc: whole for loc in locales if (whole := _whole(_duckling(phrase, loc, dims, ref), phrase))}
+    if not readings:
+        return done("not_temporal")
+    values = {loc: _shape(e, kind) for loc, e in readings.items()}
+    if len(values) == 2 and _key(values["en_US"]) != _key(values["en_GB"]):
+        usable = {loc: v for loc, v in values.items() if v and _fits(v, direction, ref_date)}
+        if len(usable) == 2:  # day/month order genuinely open: the only question asked
+            options = (("MDY", _say(usable["en_US"])), ("DMY", _say(usable["en_GB"])))
+            return TemporalReadResult("ask", source, provenance(), request, reason="DATE_ORDER_AMBIGUOUS",
+                                      question=Question("DATE_ORDER_AMBIGUOUS", "date_order",
+                                                        f"Does '{stripped}' mean {options[0][1]} or {options[1][1]}?",
+                                                        "choice", options))
+        if usable:
+            values = usable
+    locale = next(iter(values))
+    entity, value = readings[locale], values[locale]
+    read.update(body=entity["body"], engine={"dim": entity["dim"], "locale": locale,
+                                             "type": entity["value"].get("type"), "grain": entity["value"].get("grain")})
+    if value is None:  # Duckling's answer is not of the kind asked: never forced
+        return done("not_temporal", reason="KIND_MISMATCH")
+
+    if isinstance(value, PeriodValue) and value.grain == "week":
+        if ctx.week_start:
+            policies["week_start"] = ctx.week_start
         else:
-            value = DateValue(d, moment)
-            days = ORDINAL_DAY.findall(phrase)
-            if len(days) == 1 and int(days[0]) != d.day:  # not the day the text wrote: never a wrong date
-                return done("not_temporal", reason="DAY_MISREAD", data=data)
-    except (ValueError, OverflowError):  # beyond year 1..9999
-        return done("not_temporal", reason="OUT_OF_RANGE", data=data)
-    if value is None:  # the classification and dateparser's precision disagree: never forced
-        return done("not_temporal", reason="KIND_MISMATCH", data=data)
-    if labelled and kind == "date" and (d < ref if labelled == "future" else d > ref):
-        return done("not_temporal", reason="DIRECTION_MISMATCH", data=data)  # the label contradicts the text
-    return done("resolved", value, data=data)
+            defaults.append("week_start:monday")
+        if ctx.week_start == "sunday":  # Duckling's weeks start on Monday
+            value = PeriodValue(value.start - timedelta(days=1), value.end - timedelta(days=1), "week")
+    if not _fits(value, direction, ref_date):
+        return done("not_temporal", reason="DIRECTION_MISMATCH")
+    if anchor == "absolute" and not isinstance(value, DurationValue) and _counted_from_today(phrase, locale, dims, kind):
+        return done("not_temporal", reason="ANCHOR_MISMATCH")
+    return done("resolved", value)
 
 
 def answer(asked: TemporalReadResult | dict, value) -> TemporalReadResult:
@@ -333,163 +154,82 @@ def answer(asked: TemporalReadResult | dict, value) -> TemporalReadResult:
                          origin_offset=req["origin_offset"])
 
 
-def _rewrite(text: str, kind: str | None) -> tuple[str, str | None, bool]:
-    """The text in words dateparser reads, the direction it states (if any), and whether it counts in quarters.
-    Numbers in words become digits (text2num: "October twenty-sixth" -> "October 26th")."""
-    seconds = []
-    def hold(m):
-        seconds.append(m[0])
-        return f" SECONDHELD{len(seconds) - 1} "
-    text = " ".join(alpha2digit(SECOND.sub(hold, text), "en", threshold=0).split())
-    for i, word in enumerate(seconds):  # now every count is a digit: decide what each "second" is
-        held = f"SECONDHELD{i}"
-        before = text[:text.index(held)]
-        counted = COUNTED.search(before)
-        compound = kind != "duration" and counted and counted[1] and _round_ten(counted[1]) and MONTH_WORD.search(text)
-        if word.lower() == "seconds" or (counted and not compound):
-            text = text.replace(held, word, 1)  # the unit: "a second", "2 seconds"
-        elif compound:  # "October 20 second" -> "October 22nd": a round ten then "second", in a date naming a month
-            n = int(counted[1]) + 2
-            text = text[:counted.start(1)] + f"{n}nd" + text[counted.end(1):].replace(f" {held}", "", 1)
-        else:
-            text = text.replace(held, "2nd", 1)  # the ordinal: "the second", "second May"
-    text = " ".join(NUMBER_AND_UNIT.sub(_spell_unit, text).split())
-    quarters = bool(_QUARTERS.search(text))  # "1 quarter", "2 quarters" (spelled out), not "a quarter of an hour"
-    for pattern, said in LENGTH_WORDS:
-        text = pattern.sub(said, text)
-    if m := RELATIVE_WEEKDAY.fullmatch(text):
-        return m[2], WEEKDAY_DIRECTION[m[1].lower()], quarters
-    return text, None, quarters
-
-
-def _round_ten(number: str) -> bool:
-    return number.isdigit() and int(number) in range(20, 100, 10)
-
-
 def _today() -> date:
-    """Today's date: the reference when the session gives none (decided 2026-10-27). Tests replace it."""
+    """Today's date: the reference when the session gives none. Tests replace it."""
     return date.today()
 
 
-def _parse(text, settings):
-    if not text or len(text) > MAX_INPUT_CHARS:
-        return None
+def _duckling(text: str, locale: str, dims: list[str], ref: datetime) -> list[dict]:
+    body = urllib.parse.urlencode({"locale": locale, "text": text, "tz": "UTC", "dims": json.dumps(dims),
+                                   "reftime": int(ref.timestamp() * 1000)}).encode()
     try:
-        data = DateDataParser(languages=["en"], settings=settings).get_date_data(text)
-    except (ValueError, OverflowError):  # a number too big for any calendar
+        with urllib.request.urlopen(DUCKLING_URL, body, timeout=10) as response:
+            return json.loads(response.read())
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        raise EngineUnavailable(f"Duckling is not reachable at {DUCKLING_URL}: {e}") from e
+
+
+def _whole(entities: list[dict], phrase: str) -> dict | None:
+    """Duckling's reading of the whole phrase, if it has one (not latent)."""
+    whole = [e for e in entities if e["start"] == 0 and e["end"] == len(phrase) and not e.get("latent")]
+    return whole[0] if whole else None
+
+
+def _shape(entity: dict, kind: str | None):
+    """Duckling's value in the shape the label asks for, or None when it is of another kind."""
+    v = entity["value"]
+    if entity["dim"] == "duration":
+        return DurationValue(v["value"], v["unit"]) if kind in (None, "duration") else None
+    if kind == "duration":
         return None
-    return data if data.date_obj else None
-
-
-def _probe(text, settings):
-    return [_parse(text, settings | {"RELATIVE_BASE": base}) for base in PROBE_BASES]
-
-
-def _missing(text, settings, parts) -> list[str]:
-    a, b = _probe(text, settings)
-    return [p for p in parts if a and b and getattr(a.date_obj, p) != getattr(b.date_obj, p)]
-
-
-def _written(text, settings, parts) -> bool:
-    """Did the text itself give these parts? (Readable, and the same under both probe bases.)"""
-    a, b = _probe(text, settings)
-    return bool(a and b) and all(getattr(a.date_obj, p) == getattr(b.date_obj, p) for p in parts)
-
-
-def _fill(known: dict, ref: date, past: bool = False) -> date:
-    """The date with the known parts; a missing day is the 1st, a missing year or month the next occurrence after ref
-    (with past=True, the latest one on or before ref)."""
-    day = known.get("day", 1)
-    if "year" in known and "month" in known:
-        return date(known["year"], known["month"], day)
-    first = ref.year * 12 + ref.month - 1
-    for n in range(0, -SEARCH_LIMIT - 1, -1) if past else range(SEARCH_LIMIT + 1):
-        y, m0 = divmod(first + n, 12)
-        if known.get("year", y) != y or known.get("month", m0 + 1) != m0 + 1 or day > monthrange(y, m0 + 1)[1]:
-            continue
-        candidate = date(y, m0 + 1, day)
-        if (candidate <= ref) if past else (candidate > ref):
-            return candidate
-    raise ValueError(f"no occurrence of {known} after {ref}")
-
-
-def _spell_unit(m) -> str:
-    number = "0" + m[1] if m[1].startswith(".") else m[1]
-    unit = UNIT_OF[(m[2] or m[3]).lower()]
-    glued = m.string[m.end():m.end() + 1].isdigit()  # "1h30m": "1 hour 30 minutes"
-    return f"{number} {unit if Fraction(number) == 1 else unit + 's'}" + (" " if glued else "")
-
-
-def _label(r: TemporalReadResult, order: str) -> str:
-    """How one day/month reading reads to the user: the value that answer gives, every rule applied."""
-    if isinstance(r.value, DateValue):
-        return _say(r.value.date)
-    if isinstance(r.value, PeriodValue):
-        return f"{_say(r.value.start)} to {_say(r.value.end - timedelta(days=1))}"
-    return f"{'month' if order == 'MDY' else 'day'} first"
-
-
-def _say(d: date, day: bool = True) -> str:
-    """A date as the user reads it: "February 1, 2026" (not strftime: that follows the host locale)."""
-    month = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
-             "November", "December")[d.month - 1]
-    return f"{month} {d.day}, {d.year}" if day else f"{month} {d.year}"
-
-
-def _whole_period(d: date, precision: str | None, week_start: str | None) -> PeriodValue | None:
-    """The whole calendar period dateparser's answer lies in, at the precision dateparser reported."""
-    if precision == "year":
-        return PeriodValue(date(d.year, 1, 1), date(d.year + 1, 1, 1), "year")
-    if precision == "month":
-        start = d.replace(day=1)
-        return PeriodValue(start, start + relativedelta(months=1), "month")
-    if precision == "week":
-        start = d - timedelta(days=(d.weekday() - WEEK_START_DAY[week_start]) % 7)
-        return PeriodValue(start, start + timedelta(days=7), "week")
-    return None
-
-
-def _duration(text, settings, precision) -> tuple[DurationValue | None, str | None]:
-    """The quantity dateparser's reading spans, in the unit it reported; the same from both bases or nothing."""
-    quantities = []
-    for base in DURATION_BASES:
-        data = _parse(text, settings | {"RELATIVE_BASE": base})
-        if data and data.date_obj > base:  # "tomorrow at 1:00" is a moment ahead, not a length ("3 days" reads back)
-            return None, "KIND_MISMATCH"
-        quantities.append(_measure(base, data.date_obj, precision) if data else None)
-    if None in quantities:
-        return None, "KIND_MISMATCH"
-    if quantities[0] != quantities[1]:
-        return None, "MIXED_UNITS"  # e.g. months and days together: no single unit holds it exactly
-    q, unit = quantities[0], precision
-    if precision == "day" and (written := TIME_UNIT.findall(text)):  # "90 minutes": kept in minutes, not days
-        unit = min((u.lower() for u in written), key=TIME_UNITS.get)
-        q = q * Fraction(86_400_000_000, TIME_UNITS[unit])
-    return DurationValue(int(q) if q.denominator == 1 else float(q), unit), None
-
-
-def _times(count: str, n: int) -> str:
-    q = Fraction(count) * n
-    return str(int(q)) if q.denominator == 1 else str(float(q))
-
-
-def _measure(base: datetime, moment: datetime, precision: str | None) -> Fraction | None:
-    a, b = sorted((moment, base))
-    micro = (b - a) // timedelta(microseconds=1)
-    if precision == "day":
-        return Fraction(micro, 86_400_000_000)  # exact: 2.5 days stays 2.5
-    if precision == "week":
-        return Fraction(micro, 7 * 86_400_000_000)
-    rd = relativedelta(b, a)
-    if (rd.days, rd.hours, rd.minutes, rd.seconds, rd.microseconds) != (0, 0, 0, 0, 0):
+    if v.get("type") == "interval":
+        start, end = v.get("from"), v.get("to")
+        if not (start and end) or kind == "date":
+            return None
+        return PeriodValue(date.fromisoformat(start["value"][:10]), date.fromisoformat(end["value"][:10]), "interval")
+    moment = datetime.fromisoformat(v["value"]).replace(tzinfo=None)
+    grain = v["grain"]
+    if grain in GRAINS and kind != "date":
+        d = moment.date()
+        end = d + timedelta(days=7) if grain == "week" else d + relativedelta(months=MONTHS_IN[grain])
+        return PeriodValue(d, end, grain)
+    if kind == "period":
         return None
-    months = rd.years * 12 + rd.months
-    if precision == "month":
-        return Fraction(months)
-    if precision == "year" and months % 12 == 0:
-        return Fraction(months // 12)
-    return None
+    return DateValue(moment.date(), moment)
 
 
-def _jsonable(settings: dict) -> dict:
-    return {k: v.isoformat() if isinstance(v, datetime) else v for k, v in settings.items()}
+def _key(value):
+    return None if value is None else value.to_dict()
+
+
+def _fits(value, direction: str | None, ref: date) -> bool:
+    """Does the value lie on the side of the reference date the direction label says? (No label: anything fits.)"""
+    if direction is None or isinstance(value, DurationValue):
+        return True
+    if isinstance(value, DateValue):
+        return value.date >= ref if direction == "future" else value.date <= ref
+    return value.end > ref if direction == "future" else value.start <= ref
+
+
+def _counted_from_today(phrase: str, locale: str, dims: list[str], kind: str | None) -> bool:
+    """Read against two unrelated reference dates: if year, month and day all move, the phrase names no date itself
+    ("tomorrow", "next quarter"), so it cannot be absolute. ("March 15" only moves its year: it stays absolute.)"""
+    probes = []
+    for ref in PROBES:
+        entity = _whole(_duckling(phrase, locale, dims, ref), phrase)
+        value = entity and _shape(entity, kind)
+        if value is None:
+            return False
+        probes.append(value.date if isinstance(value, DateValue) else value.start)
+    a, b = probes
+    return a.year != b.year and a.month != b.month and a.day != b.day
+
+
+def _say(value) -> str:
+    def day(d):
+        return f"{MONTH_NAMES[d.month - 1]} {d.day}, {d.year}"
+    if isinstance(value, DateValue):
+        return day(value.date)
+    if isinstance(value, PeriodValue):
+        return f"{day(value.start)} to {day(value.end - timedelta(days=1))}"
+    return f"{value.quantity} {value.unit}"

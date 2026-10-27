@@ -1,7 +1,7 @@
 [project]
 name = "datephrase"
-version = "0.2.1"
-description = "Read English date phrases into typed, JSON-ready dates, periods and durations, with provenance (a thin layer over dateparser)"
+version = "0.3.0"
+description = "Read English date phrases into typed, JSON-ready dates, periods and durations, with provenance (a contract layer over Duckling)"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -10,9 +10,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "dateparser==1.4.3",
     "python-dateutil==3.0.0",
-    "text2num==3.1.0",
 ]
 
 [project.urls]

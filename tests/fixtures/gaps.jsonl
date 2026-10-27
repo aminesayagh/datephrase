@@ -1,6 +1,0 @@
-{"id": "G01", "input": "first quarter of 2026", "context": "C0", "status": "resolved", "value": {"kind": "range", "start": "2026-01-01", "end": "2026-04-01", "end_exclusive": true, "grain": "quarter"}, "classification": {"kind": "period", "anchor": "absolute"}}
-{"id": "G02", "input": "next tue", "context": "STRICT", "status": "resolved", "value": {"kind": "date", "date": "2026-10-27"}, "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
-{"id": "G03", "input": "in two weeks' time", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-11-09"}, "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
-{"id": "G04", "input": "October 26th, twenty twenty-six", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-10-26"}, "classification": {"kind": "date", "anchor": "absolute"}}
-{"id": "G05", "input": "20261026", "context": "C0", "status": "not_temporal", "classification": null}
-{"id": "G06", "input": "2 weeks later", "context": "C0", "status": "needs_context", "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}

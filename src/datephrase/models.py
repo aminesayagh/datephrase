@@ -7,7 +7,6 @@ DATE_ORDERS = ("MDY", "DMY", "YMD")
 WEEK_STARTS = ("monday", "sunday")
 KINDS = ("date", "period", "duration")
 ANCHORS = ("absolute", "relative")
-MONTH_OVERFLOWS = ("clamp", "reject")
 DIRECTIONS = ("past", "future")
 WEEKDAY_NAMES = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
@@ -18,25 +17,22 @@ class TemporalConfigError(ValueError):
 
 @dataclass(frozen=True)
 class TemporalContext:
-    """The session's settings. Unset ones get a default (today's date, Monday weeks, clamped months), recorded in
-    provenance; date_order has none: a real day/month ambiguity is asked.
+    """The session's settings. Unset ones get a default (today's date, Monday weeks), recorded in provenance;
+    date_order has none: a real day/month ambiguity is asked.
 
     reference_date: the date relative expressions count from ("tomorrow"); today's date when None.
     date_order: MDY, DMY or YMD for numeric dates such as 01/02/2026.
-    week_start: monday or sunday, for whole weeks.
-    month_overflow: clamp (Jan 31 + 1 month = Feb 28) or reject, when the target month is too short."""
+    week_start: monday or sunday, for whole weeks."""
 
     reference_date: date | None = None
     date_order: str | None = None
     week_start: str | None = None
-    month_overflow: str | None = None
 
     def __post_init__(self):
         rd = self.reference_date
         if rd is not None and type(rd) is not date:  # datetime is a date subclass
             raise TemporalConfigError(f"reference_date must be a datetime.date, got {type(rd).__name__}")
-        for name, allowed in (("date_order", DATE_ORDERS), ("week_start", WEEK_STARTS),
-                              ("month_overflow", MONTH_OVERFLOWS)):
+        for name, allowed in (("date_order", DATE_ORDERS), ("week_start", WEEK_STARTS)):
             if getattr(self, name) not in (None, *allowed):
                 raise TemporalConfigError(f"{name} must be one of {allowed} or None, got {getattr(self, name)!r}")
 
@@ -115,11 +111,10 @@ class Provenance:
     kind: str | None = None  # the caller's classification, as received
     anchor: str | None = None
     direction: str | None = None  # as labelled by the classifier; None when not sent
-    filled: tuple[str, ...] = ()  # parts the text lacked, taken from the next occurrence after the reference date
-    defaults: tuple[str, ...] = ()  # defaults applied for what the classifier or session left unset
-    policies: dict = field(default_factory=dict)  # the session settings the answer used: week_start, month_overflow
-    text_read: str | None = None  # the text as given to dateparser, when rewritten ("next Monday" -> "Monday")
-    form: str | None = None  # set when the value comes from a form built on dateparser (forms.py), e.g. "quarter"
+    defaults: tuple[str, ...] = ()  # defaults applied for what the session left unset
+    policies: dict = field(default_factory=dict)  # the session settings the answer used: week_start
+    text_read: str | None = None  # the text Duckling read (always the whole phrase)
+    engine: dict = field(default_factory=dict)  # Duckling's own description: dim, locale, type, grain
 
     def to_dict(self) -> dict:
         return {
@@ -128,11 +123,10 @@ class Provenance:
             "reference_date": self.reference_date.isoformat() if self.reference_date else None,
             "reference_source": self.reference_source,
             "classification": {"kind": self.kind, "anchor": self.anchor, "direction": self.direction},
-            "filled": list(self.filled),
             "defaults": list(self.defaults),
             "policies": self.policies,
             "text_read": self.text_read,
-            "form": self.form,
+            "engine": self.engine,
         }
 
 

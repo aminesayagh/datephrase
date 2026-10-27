@@ -10,11 +10,12 @@ from .models import (
     TemporalContext,
     TemporalReadResult,
 )
-from .reader import answer, read_temporal
+from .reader import EngineUnavailable, answer, read_temporal
 
 __all__ = [
     "DateValue",
     "DurationValue",
+    "EngineUnavailable",
     "PeriodValue",
     "Provenance",
     "Question",
