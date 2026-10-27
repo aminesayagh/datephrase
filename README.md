@@ -1,183 +1,254 @@
 # temporal-reader
 
-A thin wrapper over [dateparser](https://dateparser.readthedocs.io/) 1.4.3 (BSD-3-Clause, actively maintained), for English input. Number words go through [text2num](https://github.com/allo-media/text2num) 3.1.0 (MIT).
+Read one English date phrase (`"last quarter"`, `"next Monday"`, `"26/10/2026"`, `"a fortnight"`) into a typed, JSON-ready value: a **date**, a whole **period**, or a **duration**. Each value records how it was read.
 
-- dateparser reads the text.
-- The caller's classification (`kind`, `anchor`, `direction`) decides what shape the answer takes.
-- Gaps are filled by named rules and recorded in the result.
-- Only a choice with no evidence either way is asked: the day/month order of `01/02/2026`.
+It is a thin layer over two maintained libraries:
+
+- [dateparser](https://github.com/scrapinghub/dateparser) 1.4.3 (BSD-3-Clause) reads the text.
+- [text2num](https://github.com/allo-media/text2num) 3.1.0 (MIT) turns number words into digits.
+
+On top of them it adds four things:
+
+- **The shape you asked for.** A period is the whole period (`last month` gives September 1 to October 1), not one day inside it. A duration keeps its unit: `3 months` stays 3 months, never 90 days.
+- **Forms dateparser does not read.** Quarters, ISO week numbers, "year to date", weekends, and parts of a period ("the end of the month", "the first week of September").
+- **No silent guesses.** Every gap is filled by a named rule and recorded. The one real ambiguity, the day/month order of `01/02/2026`, comes back as a question for your user.
+- **Whole columns.** `read_column` reads a spreadsheet column of dates with a single day/month order for the whole column, decided by evidence.
+
+English only. Gregorian calendar. Python 3.13 or later.
+
+## Install
+
+```bash
+pip install "git+https://github.com/aminesayagh/temporal-reader.git"
+# or
+uv add "git+https://github.com/aminesayagh/temporal-reader.git"
+```
+
+## Quick start
 
 ```python
 from datetime import date
 from temporal_reader import TemporalContext, answer, read_temporal
 
-ctx = TemporalContext(reference_date=date(2026, 10, 27))
+ctx = TemporalContext(reference_date=date(2026, 10, 27))   # "today" for relative phrases
 
-read_temporal("October 26th, 2026").date                                   # 2026-10-26
-read_temporal("last month", context=ctx, kind="period", anchor="relative").value
-# PeriodValue(start=2026-09-01, end=2026-10-01, grain="month")
-read_temporal("March 15", context=ctx, kind="date", anchor="absolute").date   # 2027-03-15 (the next one)
-read_temporal("2.5 days", kind="duration").value                            # DurationValue(2.5, "day")
+read_temporal("October 26th, 2026").value.date                                     # 2026-10-26
+read_temporal("last quarter", context=ctx, kind="period", anchor="relative").value
+# a PeriodValue: start 2026-07-01, end 2026-10-01 (excluded), grain "quarter"
+read_temporal("next Monday", context=ctx, kind="date", anchor="relative").value.date  # 2026-11-02
+read_temporal("a fortnight", kind="duration").value                                # a DurationValue: 2 "week"
 
 r = read_temporal("01/02/2026")
-r.status                  # "ask"
-r.question.text           # "Does '01/02/2026' mean January 2, 2026 or February 1, 2026?"
-answer(r, "DMY").date     # 2026-02-01
+r.status          # "ask"
+r.question.text   # "Does '01/02/2026' mean January 2, 2026 or February 1, 2026?"
+answer(r, "DMY").value.date                                                        # 2026-02-01
 ```
 
 From the shell:
 
 ```bash
-uv run python -m temporal_reader "Wednesday" --kind date --anchor relative --direction past --context '{"reference_date": "2026-10-27"}'
+python -m temporal_reader "last quarter" --kind period --anchor relative --context '{"reference_date": "2026-10-27"}'
 ```
 
-## Three outcomes
+## How it works
 
-| `status` | Meaning |
-|---|---|
-| `resolved` | `value` is a date, a period or a duration |
-| `ask` | `question` must be forwarded to the user; send the reply back with `answer(result, reply)` |
-| `not_temporal` | No value. `reason` may say why: `KIND_MISMATCH`, `DIRECTION_MISMATCH`, `MIXED_UNITS`, `MONTH_OVERFLOW_REJECTED`, `OUT_OF_RANGE`, or none |
+You give the reader **one phrase**, not a whole sentence. Cut the phrase out first (with your own extractor or an NER model). Leave comparison words such as "before", "since" or "in the last" outside it: they belong to your query, not to the date.
 
-## Rules (decided 2026-10-27)
+Optionally, you also say what the phrase is. These labels usually come from a classifier upstream:
 
-| Gap | Rule | Recorded in |
+| Label | Values | Meaning |
 |---|---|---|
-| Missing day (`February 2026` as a date) | The 1st: 2026-02-01 | `provenance.filled` |
-| Missing year or month | The next occurrence after the reference date. On 2026-10-27: `March 15` gives 2027-03-15, `15` gives 2026-11-15, `February 29` gives 2028-02-29. Today itself is not "next": `October 27` gives 2027 and `October` gives October 2027. | `provenance.filled` |
-| No reference date in the session | Today's date | `provenance.reference_source`: `system_clock` |
-| No `direction` on a relative expression | `future` (`Wednesday` gives the next one). The text still wins: `two weeks ago` stays in the past. | `provenance.defaults` |
-| No `week_start` | `monday` (ISO 8601) | `provenance.defaults`, `provenance.policies` |
-| No `month_overflow` | `clamp`: Jan 31 + 1 month = Feb 28 | `provenance.defaults`, `provenance.policies` |
-| Day/month order unknown and two real readings | **Asked** | `question` |
+| `kind` | `date`, `period`, `duration` | One day, a whole span (a month, a quarter…), or a length of time |
+| `anchor` | `absolute`, `relative` | Written out in full (`October 2026`), or counted from today (`last month`) |
+| `direction` | `past`, `future` | For relative phrases only: which way it points when the text does not say (`Wednesday`) |
 
-Day/month order details:
+Without labels you get dateparser's single date as it is. With labels you get the shape you asked for. If dateparser's reading contradicts the labels, the result is refused (`not_temporal`), never forced.
 
-- The order is asked only when both readings are real. A reading is real when its day and month come from the text; dateparser can invent them.
-- `03/15` read day-first would make dateparser take 15 as a year and invent October 3, 2115. That reading is dropped, so `03/15` resolves to March 15 without a question.
-- Year-first dates (`2026-02-01`) never depend on the order.
+## Results
 
-## Asking
+`read_temporal` returns a `TemporalReadResult` with one of three statuses:
 
-The reader keeps no state between calls. An `ask` result's JSON carries a `request` field holding the text, the context, the labels and the answers so far. The client sends that JSON back with the user's reply:
+| `status` | What you get |
+|---|---|
+| `resolved` | `value`: a `DateValue`, `PeriodValue` or `DurationValue` |
+| `ask` | `question`: send it to your user, then call `answer(result, reply)` |
+| `not_temporal` | No value. `reason` says why when there is one (see below) |
+
+| Value | Fields |
+|---|---|
+| `DateValue` | `date`, `datetime` (a time of day, when written, is kept here) |
+| `PeriodValue` | `start`, `end` (**end excluded**: filter with `>= start AND < end`), `grain` (`week`, `month`, `quarter`, `year`, `weekend`, `year_to_date`…) |
+| `DurationValue` | `quantity` (int, or float for `2.5 days`), `unit` (`day`, `week`, `month`, `quarter`, `year`) |
+
+`result.to_dict()` is JSON-ready:
 
 ```json
 {
-  "status": "ask",
-  "question": {
-    "reason": "DATE_ORDER_AMBIGUOUS",
-    "field": "date_order",
-    "text": "Does '01/02/2026' mean January 2, 2026 or February 1, 2026?",
-    "expects": "choice",
-    "options": [{"value": "MDY", "label": "January 2, 2026"}, {"value": "DMY", "label": "February 1, 2026"}]
-  },
-  "request": {"text": "01/02/2026", "context": {...}, "kind": null, "anchor": null, "direction": null, "answers": {}, "origin_offset": 0}
+  "status": "resolved",
+  "value": {"kind": "period", "start": "2026-07-01", "end": "2026-10-01", "grain": "quarter"},
+  "question": null,
+  "reason": null,
+  "source": {"text": "last quarter", "start": 0, "end": 12},
+  "details": {"days": 92},
+  "provenance": {
+    "backend": "dateparser 1.4.3",
+    "reference_date": "2026-10-27",
+    "reference_source": "session",
+    "classification": {"kind": "period", "anchor": "relative", "direction": null},
+    "form": "quarter",
+    "text_read": null,
+    "filled": [],
+    "defaults": ["direction:future"],
+    "policies": {},
+    "settings": {"...": "the exact settings sent to dateparser"}
+  }
 }
 ```
 
-`answer(that_json, "DMY")` accepts only an offered option's value. Anything else raises `TemporalConfigError`.
+- `source` keeps the phrase's offsets. Pass `origin_offset=` to place them in a longer text.
+- `details` adds calendar facts: weekday, ISO week, quarter and day of year for a date; the number of days for a period.
+- `provenance` records everything that shaped the answer: the backend version, where "today" came from, the labels received, the form used, the rewritten text dateparser actually read, the parts filled by rule, and the defaults and policies applied.
 
-## Beyond dateparser
+`not_temporal` reasons:
 
-dateparser reads none of the following. They are built on top of it.
-
-**Rewrites (classified text only, recorded in `provenance.text_read`)**
-
-| Written | Read as |
+| Reason | Meaning |
 |---|---|
-| Number words, via text2num | `October twenty-sixth` becomes "October 26th"; `the first of March` becomes "the 1st of March"; `twenty-one days` becomes "21 days" |
-| next / last / this + weekday | `next Monday` becomes "Monday" plus future; `last Friday` becomes "Friday" plus past |
-| `a fortnight`, `a couple of days`, `half a year` | 2 weeks, 2 days, 6 months |
-| `one quarter` (a duration) | 3 months, then returned as 1 quarter |
+| `KIND_MISMATCH` | The `kind` label and dateparser's reading disagree, e.g. `period` but a single day was found |
+| `DIRECTION_MISMATCH` | The `direction` label contradicts the text (`tomorrow` labelled `past`) |
+| `DAY_MISREAD` | dateparser returned another day than the one written (it reads `1st of the month` as the 27th) |
+| `MIXED_UNITS` | `two months and five days`: no single unit holds it exactly |
+| `MONTH_OVERFLOW_REJECTED` | You set `month_overflow="reject"`, and Jan 31 + 1 month has no Feb 31 |
+| `OUT_OF_RANGE` | Before year 1 or after year 9999, or a week 53 that does not exist |
+| none | The text is not a date this reader understands |
 
-**Forms (`forms.py`, recorded in `provenance.form`; examples on 2026-10-27)**
+## Supported phrases
 
-| Form | Examples | Value |
+All examples are read with today being Tuesday, 2026-10-27.
+
+### Dates
+
+| Written | Examples | Value |
 |---|---|---|
-| `quarter` | `Q3 2026`, `2026-Q3`, `first quarter of 2026`, `last quarter`, `this quarter` | Period. Without a year: the latest one if past, else the next one. |
-| `week_number` | `2026-W43`, `week 43` | ISO week, Monday start |
-| `to_date` | `year to date`, `month to date`, `week to date`, `YTD` | Period from the start through today: `[2026-01-01, 2026-10-28)` |
-| `weekend` | `last weekend`, `this weekend` | Saturday and Sunday: `[2026-10-24, 2026-10-26)` |
-| `part_of_period` | `end of the month`, `the beginning of next week`, `mid-October`, `the first week of September` | A date (the last day, the first day, or the 15th / the middle), or a 7-day period |
+| ISO, year first | `2026-10-26`, `2026/10/26`, `2026.10.26` | 2026-10-26 (the order is fixed by the shape) |
+| Numeric day/month | `26/10/2026`, `10/26/2026`, `26.10.2026`, `26-10-2026` | 2026-10-26 (only one order is a real date) |
+| Ambiguous numeric | `01/02/2026` | **asks**: January 2 or February 1 |
+| Month name | `26 October 2026`, `October 26th, 2026`, `26 Oct 2026`, `Sept. 5, 2026`, `the 26th of October 2026` | the date |
+| With a weekday | `Mon, 26 Oct 2026` | 2026-10-26 |
+| Two-digit year | `Oct 26 '26`, `26/10/26` | 2026-10-26 |
+| With a time | `2026-10-26 at 14:30`, `2026-10-26T14:30:00Z` | 2026-10-26, with the time in `datetime` |
+| Numbers in words | `October twenty-sixth`, `the first of March` | 2026-10-26, 2026-03-01 |
+| Day words | `today`, `yesterday`, `tomorrow`, `the day after tomorrow` | counted from today |
+| Offsets | `in two weeks`, `3 days ago`, `3 weeks from now`, `in one quarter` | 2026-11-10, 2026-10-24, 2026-11-17, 2027-01-27 |
+| Weekdays | `Wednesday`, `next Monday`, `last Friday`, `next tue` | 2026-10-28 (future), 2026-11-02, 2026-10-23, 2026-11-03 |
+| Part of a period | `end of the month`, `the beginning of next week`, `mid-October`, `first day of next month`, `the last day of next month` | 2026-10-31, 2026-11-02, 2026-10-15, 2026-11-01, 2026-11-30 |
 
-**Not read, by decision:**
+### Periods
 
-- `2 business days`: no business calendar.
-- `the summer`: depends on the hemisphere.
-- `Christmas`: no holiday calendars.
-- `next weekend`: it could be this weekend or the one after.
+`end` is excluded.
 
-**Known limits (from review, 2026-10-27):**
+| Written | Examples | Value |
+|---|---|---|
+| Calendar periods | `last month`, `this week`, `next year` | 2026-09-01..2026-10-01, 2026-10-26..2026-11-02, 2027-01-01..2028-01-01 |
+| Month, year | `October 2026`, `2026-10`, `in 2026` | the whole month or year |
+| Quarters | `Q3 2026`, `2026-Q3`, `first quarter of 2026`, `last quarter`, `this quarter` | 2026-07-01..2026-10-01, … |
+| ISO weeks | `2026-W43`, `week 43` | 2026-10-19..2026-10-26 |
+| Up to today | `year to date`, `month to date`, `week to date`, `YTD` | 2026-01-01..2026-10-28 (today included) |
+| Weekends | `last weekend`, `this weekend` | 2026-10-24..2026-10-26 (Saturday and Sunday) |
+| Week of a month | `the first week of September`, `the last week of September` | 2026-09-01..2026-09-08, 2026-09-24..2026-10-01 |
 
-- **A direction label is checked only against dates, not periods.** `last quarter` labelled `future` still resolves to the past quarter.
-- **A part of a period takes the whole period's next occurrence.**
-  - `end of October` (relative, future) on 2026-10-27 gives 2027-10-31, although 2026-10-31 is still ahead.
-  - `the end of the month` labelled `absolute` gives March 2027; label it `relative`.
-- **dateparser misreads ordinals followed by "of the month".** When the day it returns isn't the written one (`1st of the month` read as the 27th), the result is `not_temporal` / `DAY_MISREAD`, never a wrong date.
+### Durations
 
-## Reading a column of cells
+The unit is kept.
 
-`read_column(values, context=None)` reads an uploaded file's date column with **one** day/month order:
+| Written | Examples | Value |
+|---|---|---|
+| Number and unit | `30 days`, `two weeks`, `3 months`, `one year`, `1 year 2 months` | 30 day, 2 week, 3 month, 1 year, 14 month |
+| Fractions | `2.5 days`, `1.5 weeks` | exact: 2.5 day, 1.5 week |
+| In words | `twenty-one days`, `a fortnight`, `a couple of days`, `half a year`, `one quarter` | 21 day, 2 week, 2 day, 6 month, 1 quarter |
+
+## Rules instead of guesses
+
+When the text and the session leave something open, a fixed rule fills it. Every applied rule is listed in `provenance`:
+
+| Open | Rule | Recorded in |
+|---|---|---|
+| Missing year or month (`March 15`, absolute) | The **next occurrence** after today: 2027-03-15. Today itself is not "next": `October 27` gives 2027-10-27, and `October` gives October 2027. | `filled` |
+| Missing day (`February 2026` as a date) | The 1st: 2026-02-01 | `filled` |
+| No `reference_date` in the context | Today's date from the system clock. Pass it explicitly to make results reproducible. | `reference_source: "system_clock"` |
+| No `direction` on a relative phrase | `future` (`Wednesday` gives the next one). The text wins when it says: `two weeks ago` stays in the past. | `defaults` |
+| No `week_start` | Monday (ISO 8601) | `defaults`, `policies` |
+| No `month_overflow` | `clamp`: Jan 31 + 1 month = Feb 28 | `defaults`, `policies` |
+| Day/month order, when both readings are real dates and differ | **Asked**, never guessed | `question` |
+
+A reading is real only when its day and month come from the text. `03/15` read day-first would invent a month, so it resolves to March 15 without a question.
+
+### Session context
 
 ```python
-r = read_column(["01/10/2026", "26.10.2026", "05/11/2026"])
-r.order, r.order_source     # "DMY", "evidence"  (26.10.2026 only reads day first)
-r.cells                     # {"01/10/2026": "2026-10-01", "26.10.2026": "2026-10-26", "05/11/2026": "2026-11-05"}
+TemporalContext(
+    reference_date=date(2026, 10, 27),  # today for relative phrases; system date when None
+    date_order=None,                    # "MDY", "DMY" or "YMD" for numeric dates; None = ask on real ambiguity
+    week_start=None,                    # "monday" or "sunday"; None = monday
+    month_overflow=None,                # "clamp" or "reject"; None = clamp
+)
 ```
 
-- The order comes from `context.date_order`, or else from evidence: a cell only one order reads (a day over 12) settles the column.
-- With no evidence and a cell that both orders read differently, there is **one question for the column**, never one per cell. To answer it, read the column again with `TemporalContext(date_order=<the chosen value>)`.
-- Cells that contradict each other (`26/10/2026` beside `10/26/2026`) get one `ORDER_CONFLICT` question.
-- Cells that don't depend on the order (`2026-10-26`, `26 Oct 2026`) are always read. A cell against the order, or not a date, is `None`.
-- A cell no order reads as a day and a month (`12/2026`) doesn't depend on the order, so it is read either way.
-- Cells are keyed by their stripped text. Non-string cells (`None`, date objects) are skipped.
-- Each distinct cell is read once. A cell missing its year gets the next occurrence, listed in `filled`.
+Invalid settings raise `TemporalConfigError`. So does an answer that is not one of the offered options.
 
-## Classification from the caller
+## Asking the user
 
-| Label | Values | Effect |
-|---|---|---|
-| `kind` | `date`, `period`, `duration` | **period:** the whole calendar period around dateparser's answer, at the precision it reported. **duration:** the exact quantity in dateparser's unit (`2.5 days`, `1.5 weeks`, `1 year 2 months` = 14 months). Months and days together (`two months and five days`) have no single unit and give `MIXED_UNITS`. |
-| `anchor` | `absolute`, `relative` | **absolute:** missing parts are detected and filled by the rules above. dateparser parses the text against two unrelated base dates, and a part that changes with the base was not written. dateparser's own `REQUIRE_PARTS` is not used, because it misreads `March 15` as March 2015. **relative:** counts from the reference date. |
-| `direction` | `past`, `future`; only with `anchor="relative"` | Chooses between readings that differ (`Wednesday`). A label that contradicts the text (`tomorrow` + `past`) gives `DIRECTION_MISMATCH`. |
+The only question is the day/month order. The reader keeps no state between calls: an `ask` result's JSON carries a `request` with everything needed to resume. You can send it to a client and back:
 
-If a label and dateparser disagree (for example `period`, but dateparser found a single day), the result is `not_temporal` / `KIND_MISMATCH`. It is never forced.
+```python
+r = read_temporal("01/02/2026")
+payload = r.to_dict()          # send payload["question"] to the user: text + options
+# payload["question"]["options"] == [{"value": "MDY", "label": "January 2, 2026"},
+#                                    {"value": "DMY", "label": "February 1, 2026"}]
+answer(payload, "DMY").value.date   # 2026-02-01
+```
 
-## Session context
+To stop asking for a whole session, set `TemporalContext(date_order="DMY")`.
 
-| Field | Values | Default when unset |
-|---|---|---|
-| `reference_date` | `datetime.date` | today's date |
-| `date_order` | `MDY`, `DMY`, `YMD` | none: a real ambiguity is asked |
-| `week_start` | `monday`, `sunday` | `monday` |
-| `month_overflow` | `clamp`, `reject` | `clamp` |
+## Reading a column
 
-## Output
+`read_column(values, context=None)` reads a column of cells, such as a spreadsheet's date column, with **one** day/month order for the whole column:
 
-A resolved result also carries:
+```python
+from temporal_reader import read_column
 
-- `period` and `locale`: dateparser's precision and language.
-- `details`: weekday, ISO week, quarter and day of year for a date; the number of days for a period.
-- `source`: the text and its offsets.
-- `provenance`: the backend version, the exact settings sent, the reference date and its source, the classification received, and the `filled`, `defaults` and `policies` described above.
+r = read_column(["01/10/2026", "26.10.2026", "05/11/2026"])
+r.order, r.order_source   # ("DMY", "evidence"): "26.10.2026" only reads day first
+r.cells                   # {"01/10/2026": "2026-10-01", "26.10.2026": "2026-10-26", "05/11/2026": "2026-11-05"}
+```
 
-## The brief's cases
+- **The order** comes from `context.date_order`, or else from evidence: one cell that only one order reads (a day over 12) settles the whole column.
+- **No evidence:** with no deciding cell and at least one ambiguous cell, you get **one** question for the column (`DATE_ORDER_AMBIGUOUS`), never one per cell. Answer it by calling `read_column` again with `TemporalContext(date_order=<chosen value>)`.
+- **Contradicting cells** (`26/10/2026` beside `10/26/2026`) give one `ORDER_CONFLICT` question.
+- **Order-free cells** (`2026-10-26`, `26 Oct 2026`, `12/2026`) are always read.
+- **`None` cells:** a cell against the chosen order, or one that is not a date.
+- **Keys and missing parts:** cells are keyed by their stripped text, and each distinct cell is read once. A cell missing its year gets the next occurrence, listed in `r.filled`.
 
-`tests/test_spec_cases.py` sends the brief's 156 cases, each with the classification a correct classifier gives it. Expected values that the decisions above change are written by hand:
+## Not supported
 
-- **`DECIDED` (16 cases):** next occurrence, today's date, the defaults, and the direction.
-- **`ACCEPTED` (25 cases):** the brief's "unsupported" inputs. Each one must be dateparser's correct reading, or an honest `not_temporal` / `ask`; never another value.
+Read as `not_temporal` by design:
 
-**150 pass, 6 are known failures.** Each failure carries its reason in `KNOWN`:
+- Business days and holidays (`2 business days`, `Christmas`): no business or holiday calendar.
+- Seasons (`the summer`): they depend on the hemisphere.
+- `next weekend`: English does not say whether it means this weekend or the one after.
+- Rolling windows and ranges as one phrase (`last 30 days`, `since March`, `between March and May`): read the parts, e.g. `30 days` as a duration, and build the range in your query.
+- Fractional months and years (`1.5 months`, `half a month`): dateparser does not read them.
+- Languages other than English.
 
-| Count | Cause |
-|---|---|
-| 1 | a year in words: `twenty twenty-six` becomes "20 26" in text2num |
-| 3 | dateparser accepts something wrong: `2026-13-01` (month and day swapped), a weekday that contradicts the date, the suffix in `26rd` |
-| 1 | `2 weeks later`: counted from the reference date, where the brief asks "later than what?" |
-| 1 | the label conflicts with the brief: `2026` labelled `period` returns the year, while the brief asks for its role |
+Known limits:
 
-The failures are marked `strict`: a case that starts passing fails the run, so the list stays accurate.
+- `the 15th`, read as relative, can land in the past: dateparser ignores the future preference for a lone day number.
+- A `direction` label is checked against dates, not periods: `last quarter` labelled `future` still resolves.
+- A part of a period takes the whole period's next occurrence: `end of October` on 2026-10-27 gives 2027-10-31.
+- Years in words (`twenty twenty-six`) are not read.
+- dateparser accepts some impossible input instead of rejecting it:
+  - `2026-13-01` is read as January 13.
+  - `26rd` is read as the 26th.
+  - A weekday that contradicts the date is ignored.
 
 ## Tests
 
@@ -185,3 +256,9 @@ The failures are marked `strict`: a case that starts passing fails the run, so t
 uv sync
 uv run pytest -q     # 301 passed, 6 xfailed
 ```
+
+- **`tests/test_reader.py` and `tests/test_forms.py`** cover every supported form, the rules, the questions, columns, provenance and the JSON contract.
+- **`tests/test_spec_cases.py`** runs a reference set of 156 labelled cases (`tests/fixtures/`):
+  - 150 pass.
+  - The 6 known gaps above are marked `xfail(strict=True)` with their reason, so a case that starts passing fails the run until the list is updated.
+- **Backend answers are pinned.** A dateparser upgrade that changes an answer fails a test before it reaches your code.

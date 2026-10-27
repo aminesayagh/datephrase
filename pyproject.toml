@@ -1,7 +1,7 @@
 [project]
 name = "temporal-reader"
 version = "0.1.0"
-description = "Thin wrapper over dateparser: English date expressions to typed, serialized dates, periods and durations"
+description = "Read English date phrases into typed, JSON-ready dates, periods and durations, with provenance (a thin layer over dateparser)"
 readme = "README.md"
 authors = [
     { name = "aminesayagh", email = "aminesayagh1997@gmail.com" }
@@ -12,6 +12,9 @@ dependencies = [
     "python-dateutil==3.0.0",
     "text2num==3.1.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/aminesayagh/temporal-reader"
 
 [build-system]
 requires = ["uv_build>=0.11.17,<0.12.0"]
