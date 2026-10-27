@@ -189,7 +189,9 @@ def _shape(entity: dict, kind: str | None):
         return PeriodValue(date.fromisoformat(start["value"][:10]), date.fromisoformat(end["value"][:10]), "interval")
     moment = datetime.fromisoformat(v["value"]).replace(tzinfo=None)
     grain = v["grain"]
-    if grain in GRAINS and kind != "date":
+    if grain in GRAINS:
+        if kind == "date":  # Duckling says it only knows the week, month, quarter or year ("in one year"): not a day
+            return None
         d = moment.date()
         end = d + timedelta(days=7) if grain == "week" else d + relativedelta(months=MONTHS_IN[grain])
         return PeriodValue(d, end, grain)

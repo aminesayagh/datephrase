@@ -1,27 +1,28 @@
 # datephrase
 
-Read one English date phrase (`"last quarter"`, `"next Monday"`, `"26/10/2026"`, `"a fortnight"`) into a typed, JSON-ready value: a **date**, a whole **period**, or a **duration**. Each value records how it was read.
+Read one English date phrase (`"last month"`, `"next Monday"`, `"26/10/2026"`, `"3 days"`) into a typed, JSON-ready value: a **date**, a whole **period**, or a **duration**, with a record of how it was read.
 
-It is a thin layer over two maintained libraries:
+datephrase **parses nothing itself**. [Duckling](https://github.com/facebook/duckling), Meta's maintained date and time recogniser, reads the phrase. datephrase is the contract layer around it:
 
-- [dateparser](https://github.com/scrapinghub/dateparser) 1.4.3 (BSD-3-Clause) reads the text.
-- [text2num](https://github.com/allo-media/text2num) 3.1.0 (MIT) turns number words into digits.
+- **The shape you ask for.** You label the phrase as a date, a period or a duration. The answer comes back in that shape, or is refused.
+- **Never a silent guess.**
+  - Only Duckling's reading of the **whole** phrase counts.
+  - A reading that contradicts your labels is refused.
+  - The one real ambiguity, the day/month order of `03/04/2026`, comes back as a question for your user.
+- **Provenance.** Every answer says what Duckling read, at which precision, against which reference date.
 
-On top of them it adds three things:
+English only. Python 3.13 or later.
 
-- **The shape you asked for.** A period is the whole period (`last month` gives September 1 to October 1), not one day inside it. A duration keeps its unit: `3 months` stays 3 months, never 90 days.
-- **Forms dateparser does not read.** Quarters, ISO week numbers, "year to date", weekends, and parts of a period ("the end of the month", "the first week of September").
-- **No silent guesses.** Every gap is filled by a named rule and recorded. The one real ambiguity, the day/month order of `01/02/2026`, comes back as a question for your user.
+## Install and run Duckling
 
-English only. Gregorian calendar. Python 3.13 or later.
-
-## Install
+datephrase talks to a Duckling service over HTTP. Run one locally with Docker; it stays on your machine:
 
 ```bash
+docker run -d --rm -p 127.0.0.1:8000:8000 --name duckling rasa/duckling:latest
 pip install "git+https://github.com/aminesayagh/datephrase.git"
-# or
-uv add "git+https://github.com/aminesayagh/datephrase.git"
 ```
+
+The service address defaults to `http://127.0.0.1:8000/parse`. Set `DATEPHRASE_DUCKLING_URL` to use another one. If the service can't be reached, `read_temporal` raises `EngineUnavailable`: that's a deployment problem, never a statement about the text.
 
 ## Quick start
 
@@ -31,224 +32,113 @@ from datephrase import TemporalContext, answer, read_temporal
 
 ctx = TemporalContext(reference_date=date(2026, 10, 27))   # "today" for relative phrases
 
-read_temporal("October 26th, 2026").value.date                                     # 2026-10-26
-read_temporal("last quarter", context=ctx, kind="period", anchor="relative").value
-# a PeriodValue: start 2026-07-01, end 2026-10-01 (excluded), grain "quarter"
-read_temporal("next Monday", context=ctx, kind="date", anchor="relative").value.date  # 2026-11-02
-read_temporal("a fortnight", kind="duration").value                                # a DurationValue: 2 "week"
+read_temporal("next Monday", context=ctx, kind="date", anchor="relative").value.date      # 2026-11-02
+read_temporal("last month", context=ctx, kind="period", anchor="relative").value
+# a PeriodValue: start 2026-09-01, end 2026-10-01 (excluded), grain "month"
+read_temporal("90 minutes", kind="duration").value                                        # 90 "minute"
 
-r = read_temporal("01/02/2026")
-r.status          # "ask"
-r.question.text   # "Does '01/02/2026' mean January 2, 2026 or February 1, 2026?"
-answer(r, "DMY").value.date                                                        # 2026-02-01
+r = read_temporal("03/04/2026", context=ctx)
+r.status, r.question.text   # "ask", "Does '03/04/2026' mean March 4, 2026 or April 3, 2026?"
+answer(r, "DMY").value.date                                                               # 2026-04-03
 ```
 
 From the shell:
 
 ```bash
-python -m datephrase "last quarter" --kind period --anchor relative --context '{"reference_date": "2026-10-27"}'
+python -m datephrase "last month" --kind period --anchor relative --context '{"reference_date": "2026-10-27"}'
 ```
 
-## How it works
+## The contract
 
-You give the reader **one phrase holding one date**, not a whole sentence. This is the caller's promise: a string holding several dates (`yesterday and tomorrow`) is not checked, and what comes back for it is not defined. Cut the phrase out first (with your own extractor or an NER model). Leave comparison words such as "before", "since" or "in the last" outside it: they belong to your query, not to the date.
+### What you send
 
-Optionally, you also say what the phrase is. These labels usually come from a classifier upstream:
+- **One phrase holding one date**, cut out of the sentence by your own extractor. Leave comparison words like "before" or "in the last" outside it. A string with several dates is not checked; what comes back for it is not defined.
+- **Optional labels**, usually from a classifier:
 
 | Label | Values | Meaning |
 |---|---|---|
-| `kind` | `date`, `period`, `duration` | One day, a whole span (a month, a quarter…), or a length of time |
-| `anchor` | `absolute`, `relative` | Written out in full (`October 2026`), or counted from today (`last month`) |
-| `direction` | `past`, `future` | For relative phrases only: which way it points when the text does not say (`Wednesday`) |
+| `kind` | `date`, `period`, `duration` | One day, a whole span, or a length of time |
+| `anchor` | `absolute`, `relative` | Written in full (`October 2026`), or counted from today (`last month`) |
+| `direction` | `past`, `future` | For relative phrases: which side of today the answer must be on |
 
-Without labels you get dateparser's single date as it is. With labels you get the shape you asked for. If dateparser's reading contradicts the labels, the result is refused (`not_temporal`), never forced.
+- **The session context:**
 
-## Results
+| Field | Values | When unset |
+|---|---|---|
+| `reference_date` | `datetime.date` | today's date (recorded as `system_clock`) |
+| `date_order` | `MDY`, `DMY`, `YMD` | a genuine day/month ambiguity is asked |
+| `week_start` | `monday`, `sunday` | Monday, Duckling's convention (recorded in `defaults`) |
 
-`read_temporal` returns a `TemporalReadResult` with one of three statuses:
+### What datephrase does with Duckling's answer
 
-| `status` | What you get |
+1. **Whole phrase only.** Duckling also reads parts of a phrase: "the year 2027" can come back as just "the year". A part is not the phrase, so it's refused.
+2. **Day/month order.** The phrase is read with US English (month first) and UK English (day first) settings.
+   - If both read it and agree, there's nothing to ask.
+   - If only one reads it, that one is used: `26/10/2026`.
+   - If both read it differently, the user is **asked**: `03/04/2026`. If only one of the two answers fits your labels, that one is used.
+3. **Shape by label:**
+   - **date:** a day. Duckling's day, hour or minute precision is accepted; a week, month, quarter or year answer (`in one year` comes back as "October 2027") is refused, since it isn't a day.
+   - **period:** the whole week, month, quarter or year at Duckling's precision, or Duckling's interval. A single day is refused.
+   - **duration:** Duckling's length, in Duckling's unit.
+   - **no label:** whatever Duckling read.
+4. **Label checks:**
+   - `direction` must agree with the side of today the answer falls on.
+   - `absolute` must name a date of its own: a phrase whose year, month and day all move with "today" (`tomorrow`, `next quarter`) is refused.
+
+### What comes back
+
+| `status` | Meaning |
 |---|---|
-| `resolved` | `value`: a `DateValue`, `PeriodValue` or `DurationValue` |
-| `ask` | `question`: send it to your user, then call `answer(result, reply)` |
-| `not_temporal` | No value. `reason` says why when there is one (see below) |
+| `resolved` | `value` is a `DateValue` (`date`, `datetime`), a `PeriodValue` (`start`, `end` excluded, `grain`), or a `DurationValue` (`quantity`, `unit`) |
+| `ask` | `question` to forward to your user, with the options to send back through `answer(result, reply)` |
+| `not_temporal` | No value. `reason`: `KIND_MISMATCH`, `DIRECTION_MISMATCH`, `ANCHOR_MISMATCH`, `TOO_LONG`, or none when Duckling read nothing for the whole phrase |
 
-| Value | Fields |
-|---|---|
-| `DateValue` | `date`, `datetime` (a time of day, when written, is kept here) |
-| `PeriodValue` | `start`, `end` (**end excluded**: filter with `>= start AND < end`), `grain` (`week`, `month`, `quarter`, `year`, `weekend`, `year_to_date`…) |
-| `DurationValue` | `quantity` (int, or float for `2.5 days`), `unit` (`second`, `minute`, `hour`, `day`, `week`, `month`, `quarter`, `year`) |
+`result.to_dict()` is JSON-ready. `provenance` holds:
 
-`result.to_dict()` is JSON-ready:
+- `text_read`: what Duckling read.
+- `engine`: Duckling's dim, locale, type and grain.
+- `reference_date` and `reference_source`.
+- `classification`: the labels you sent.
+- `defaults` and `policies`.
 
-```json
-{
-  "status": "resolved",
-  "value": {"kind": "period", "start": "2026-07-01", "end": "2026-10-01", "grain": "quarter"},
-  "question": null,
-  "reason": null,
-  "source": {"text": "last quarter", "start": 0, "end": 12},
-  "details": {"days": 92},
-  "provenance": {
-    "backend": "dateparser 1.4.3",
-    "reference_date": "2026-10-27",
-    "reference_source": "session",
-    "classification": {"kind": "period", "anchor": "relative", "direction": null},
-    "form": "quarter",
-    "text_read": null,
-    "filled": [],
-    "defaults": ["direction:future"],
-    "policies": {},
-    "settings": {"...": "the exact settings sent to dateparser"}
-  }
-}
-```
+## Duckling's conventions, which datephrase inherits
 
-- `source` keeps the phrase's offsets. Pass `origin_offset=` to place them in a longer text.
-- `details` adds calendar facts: weekday, ISO week, quarter and day of year for a date; the number of days for a period.
-- `provenance` records everything that shaped the answer: the backend version, where "today" came from, the labels received, the form used, the rewritten text dateparser actually read, the parts filled by rule, and the defaults and policies applied.
+- **"next Wednesday", said on a Tuesday,** is the Wednesday of **next week**.
+- **A weekend** runs from **Friday 18:00** to Monday.
+- **A date without its year that has already passed this year** (`October 1`, said on October 27) is **this year's**.
+- **Durations mixing months and days are converted at 30 days a month:** `two months and five days` is 65 days.
+- **Weeks start on Monday.** `week_start="sunday"` shifts weekly periods back one day.
 
-`not_temporal` reasons:
+## Measured
 
-| Reason | Meaning |
-|---|---|
-| `KIND_MISMATCH` | The `kind` label and dateparser's reading disagree: `period` but a single day was found, `period` for a lone day (`the first`), or `duration` for anything that is not a run of "number + unit" (`tomorrow`, `yesterday at 12:00`) |
-| `ANCHOR_MISMATCH` | `absolute`, but the phrase is counted from today: it names no part of a date itself (`tomorrow`, `Wednesday`, `this month`), or it is a form like `next quarter`, `this weekend` or `year to date` |
-| `DIRECTION_MISMATCH` | The `direction` label contradicts the text (`tomorrow` labelled `past`) |
-| `DAY_MISREAD` | dateparser returned another day than the one written (it reads `1st of the month` as the 27th) |
-| `MIXED_UNITS` | `two months and five days`: no single unit holds it exactly |
-| `FRACTION_NOT_SUPPORTED` | A fractional count of months, quarters or years in any spelling (`1.5 months`, `.5 yr`, `1.5-year`): dateparser would read "1.5" as January 5 |
-| `MONTH_OVERFLOW_REJECTED` | You set `month_overflow="reject"`, and Jan 31 + 1 month has no Feb 31 |
-| `OUT_OF_RANGE` | Before year 1 or after year 9999, a week 53 or a day that does not exist (`the 32nd`, `the 31st day of next month`), or a number too big for any calendar |
-| `TOO_LONG` | More than 512 characters, measured on the text as given: a phrase, not a document |
-| none | The text is not a date this reader understands |
+`benchmarks/engines` runs 300 short texts, each with one date expression, through datephrase and through other engines directly. Every engine gets the same labels. Expected values come from independent calendar arithmetic.
 
-## Supported phrases
+| Engine | Correct | Other convention | **Silent wrong** | Refused |
+|---|---|---|---|---|
+| **datephrase (contract over Duckling)** | 246 | 10 | **0** | 44 |
+| Duckling alone | 232 | 10 | 37 | 21 |
+| dateparser | 195 | 0 | 39 | 66 |
+| chrono-node | 192 | 7 | 81 | 20 |
 
-All examples are read with today being Tuesday, 2026-10-27.
+The 44 refusals are what Duckling cannot read whole, or reads less precisely than asked:
 
-### Dates
+- parts of a period (`the end of the month`, `mid-November`);
+- year offsets (`in one year`, read to the month);
+- `the year 2027`, ISO weeks (`2026-W45`), `Q1 2027`;
+- some abbreviations (`2 wks`, `3 mos`).
 
-| Written | Examples | Value |
-|---|---|---|
-| ISO, year first | `2026-10-26`, `2026/10/26`, `2026.10.26` | 2026-10-26 (the order is fixed by the shape) |
-| Numeric day/month | `26/10/2026`, `10/26/2026`, `26.10.2026`, `26-10-2026` | 2026-10-26 (only one order is a real date) |
-| Ambiguous numeric | `01/02/2026`, `01 02 2026`, `1,2,2026` | **asks**: January 2 or February 1 |
-| Month name | `26 October 2026`, `October 26th, 2026`, `26 Oct 2026`, `Sept. 5, 2026`, `the 26th of October 2026` | the date |
-| With a weekday | `Mon, 26 Oct 2026` | 2026-10-26 |
-| Two-digit year | `Oct 26 '26`, `26/10/26` | 2026-10-26 |
-| With a time | `2026-10-26 at 14:30`, `2026-10-26T14:30:00Z` | 2026-10-26, with the time in `datetime` |
-| Numbers in words | `October twenty-sixth`, `the first of March` | 2026-10-26, 2026-03-01 |
-| Day words | `today`, `yesterday`, `tomorrow`, `the day after tomorrow` | counted from today |
-| Offsets | `in two weeks`, `3 days ago`, `3 weeks from now`, `in one quarter` | 2026-11-10, 2026-10-24, 2026-11-17, 2027-01-27 |
-| Weekdays | `Wednesday`, `next Monday`, `last Friday`, `next tue` | 2026-10-28 (future), 2026-11-02, 2026-10-23, 2026-11-03 |
-| Part of a period | `end of the month`, `the beginning of next week`, `mid-October`, `first day of next month`, `the fifth day of next month`, `the 15th of last month`, `the 100th day of 2027` | 2026-10-31, 2026-11-02, 2026-10-15, 2026-11-01, 2026-11-05, 2026-09-15, 2027-04-10 |
-
-### Periods
-
-`end` is excluded.
-
-| Written | Examples | Value |
-|---|---|---|
-| Calendar periods | `last month`, `this week`, `next year` | 2026-09-01..2026-10-01, 2026-10-26..2026-11-02, 2027-01-01..2028-01-01 |
-| Month, year | `October 2026`, `2026-10`, `in 2026` | the whole month or year |
-| Quarters | `Q3 2026`, `2026-Q3`, `first quarter of 2026`, `last quarter`, `this quarter` | 2026-07-01..2026-10-01, … |
-| ISO weeks | `2026-W43`, `week 43` | 2026-10-19..2026-10-26 |
-| Up to today | `year to date`, `month to date`, `week to date`, `YTD` | 2026-01-01..2026-10-28 (today included) |
-| Weekends | `last weekend`, `this weekend` | 2026-10-24..2026-10-26, 2026-10-31..2026-11-02 (Saturday and Sunday) |
-| Week of a month | `the first week of September`, `the last week of September` | 2026-09-01..2026-09-08, 2026-09-24..2026-10-01 |
-
-### Durations
-
-The unit is kept. A duration is a run of "number + unit", joined by spaces, commas, `and` or `&` (`3 days`, `1 year 2 months`, `3 days, 2 hours`, `1h30m`, `2 hours ago`); anything else is refused as a duration. Pieces in different units add up in the smallest one: `3 days & 2 hours` is 74 hours.
-
-| Written | Examples | Value |
-|---|---|---|
-| Number and unit | `30 days`, `two weeks`, `3 months`, `one year`, `1 year 2 months` | 30 day, 2 week, 3 month, 1 year, 14 month |
-| Fractions | `2.5 days`, `1.5 weeks`, `1.5 fortnights` | exact: 2.5 day, 1.5 week, 3 week |
-| Times | `1 second`, `90 minutes`, `3 hours` | kept in that unit: 1 second, 90 minute, 3 hour |
-| Unit spellings | `90 mins`, `2 hrs`, `30 secs`, `3 wks`, `6 mos`, `2 yrs`, `two qtrs`, `1.50hours`, `2-week`, `90m`, `1.5h`, `3d`, `2w`, `5y` | 90 minute, 2 hour, 30 second, 3 week, 6 month, 2 year, 2 quarter, 1.5 hour, 2 week, 90 minute, 1.5 hour, 3 day, 2 week, 5 year (one letter only right after its number, as dateparser reads it: `m` is minutes) |
-| In words | `twenty-one days`, `a week`, `a fortnight`, `a couple of days`, `half a year`, `one quarter` | 21 day, 1 week, 2 week, 2 day, 6 month, 1 quarter |
-
-## Rules instead of guesses
-
-When the text and the session leave something open, a fixed rule fills it. Every applied rule is listed in `provenance`:
-
-| Open | Rule | Recorded in |
-|---|---|---|
-| Missing year or month (`March 15`, absolute) | The **next occurrence** after today: 2027-03-15. Today itself is not "next": `October 27` gives 2027-10-27, and `October` gives October 2027. | `filled` |
-| Missing day (`February 2026` as a date) | The 1st: 2026-02-01 | `filled` |
-| A day alone (`the first`, `the 15th`, `the 1st of the month`, `the 15th at noon`) | That day at its next occurrence: 2026-11-01, 2026-11-15 (its latest one when the direction is past), skipping months without it (`the 31st`); a time of day is kept. Only a phrase that is wholly a day counts: `the 15th of last month` is day 15 of that month, `the 2nd banana` is not a date. dateparser alone reads `the 1st` to `the 12th` as months. | `filled` |
-| No `reference_date` in the context | Today's date from the system clock. Pass it explicitly to make results reproducible. | `reference_source: "system_clock"` |
-| No `direction` on a relative phrase | `future` (`Wednesday` gives the next one). The text wins when it says: `two weeks ago` stays in the past. | `defaults` |
-| No `week_start` | Monday (ISO 8601) | `defaults`, `policies` |
-| No `month_overflow` | `clamp`: Jan 31 + 1 month = Feb 28 | `defaults`, `policies` |
-| Day/month order, when both readings are real dates and differ | **Asked**, never guessed | `question` |
-
-A reading is real only when its day and month come from the text. `03/15` read day-first would invent a month, so it resolves to March 15 without a question.
-
-### Session context
-
-```python
-TemporalContext(
-    reference_date=date(2026, 10, 27),  # today for relative phrases; system date when None
-    date_order=None,                    # "MDY", "DMY" or "YMD" for numeric dates; None = ask on real ambiguity
-    week_start=None,                    # "monday" or "sunday"; None = monday
-    month_overflow=None,                # "clamp" or "reject"; None = clamp
-)
-```
-
-Invalid settings raise `TemporalConfigError`. So does an answer that is not one of the offered options.
-
-## Asking the user
-
-The only question is the day/month order. The reader keeps no state between calls: an `ask` result's JSON carries a `request` with everything needed to resume. You can send it to a client and back:
-
-```python
-r = read_temporal("01/02/2026")
-payload = r.to_dict()          # send payload["question"] to the user: text + options
-# payload["question"]["options"] == [{"value": "MDY", "label": "January 2, 2026"},
-#                                    {"value": "DMY", "label": "February 1, 2026"}]
-answer(payload, "DMY").value.date   # 2026-02-01
-```
-
-To stop asking for a whole session, set `TemporalContext(date_order="DMY")`.
-
-## Not supported
-
-Read as `not_temporal` by design:
-
-- Business days and holidays (`2 business days`, `Christmas`): no business or holiday calendar.
-- Seasons (`the summer`): they depend on the hemisphere.
-- `next weekend`: English does not say whether it means this weekend or the one after.
-- Rolling windows and ranges as one phrase (`last 30 days`, `since March`, `between March and May`): read the parts, e.g. `30 days` as a duration, and build the range in your query.
-- Fractional months and years (`1.5 months`, `half a month`): dateparser does not read them.
-- Languages other than English.
-
-Known limits:
-
-- `the 15th`, read as relative, can land in the past: dateparser ignores the future preference for a lone day number.
-- A `direction` label is checked against dates, not periods: `last quarter` labelled `future` still resolves.
-- A part of a period takes the whole period's next occurrence: `end of October` on 2026-10-27 gives 2027-10-31.
-- Years in words (`twenty twenty-six`) are not read.
-- dateparser accepts some impossible input instead of rejecting it:
-  - `2026-13-01` is read as January 13.
-  - `26rd` is read as the 26th.
-  - A weekday that contradicts the date is ignored.
+They come back as `not_temporal`, never as a wrong value.
 
 ## Tests
 
 ```bash
 uv sync
-uv run pytest -q     # 1300 passed, 6 xfailed
+uv run pytest -q
 ```
 
-- **`tests/test_reader.py`, `tests/test_forms.py`, `tests/test_review_gpt61.py` and `tests/test_audit_fixes.py`** cover every supported form, the rules, the questions, provenance, the JSON contract, and each finding of the code reviews. Each finding is tested on the whole class of input it is about (spacings, spellings, every ordinal day on several reference dates), not only the reported phrase.
-- **`tests/test_spec_cases.py`** runs a reference set of 156 labelled cases (`tests/fixtures/`):
-  - 150 pass.
-  - The 6 known gaps above are marked `xfail(strict=True)` with their reason, so a case that starts passing fails the run until the list is updated.
-- **Backend answers are pinned.** A dateparser upgrade that changes an answer fails a test before it reaches your code.
+- **`tests/test_contract.py`** pins the contract against a fake Duckling: shapes, refusals, the question, provenance, settings and errors. It needs no service.
+- **`tests/test_live.py`** runs representative phrases against a real Duckling, and is skipped when none is running.
 
 ## License
 
-[MIT](LICENSE). The dependencies keep their own licenses: dateparser is BSD-3-Clause, text2num is MIT.
+[MIT](LICENSE). Duckling is BSD-licensed and runs as a separate service.

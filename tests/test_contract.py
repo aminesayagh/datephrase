@@ -94,6 +94,14 @@ def test_an_answer_of_another_kind_is_refused(engine, entity, kind):
     assert (r.status, r.reason, r.value) == ("not_temporal", "KIND_MISMATCH", None)
 
 
+@pytest.mark.parametrize("grain", ["week", "month", "quarter", "year"])
+def test_a_date_asked_but_only_a_coarser_grain_known_is_refused(engine, grain):
+    # Duckling answers "in one year" with 2027-10-01 at month grain: it does not know the day
+    engine[0]["in one year"] = [time_entity("in one year", "2027-10-01T00:00:00.000+00:00", grain)]
+    r = read("in one year", kind="date", anchor="relative")
+    assert (r.status, r.reason) == ("not_temporal", "KIND_MISMATCH")
+
+
 def test_a_reading_of_part_of_the_phrase_is_not_the_phrase(engine):
     # Duckling reads "the year 2027" as "the year" (= 2026): a part never counts
     engine[0]["the year 2027"] = [time_entity("the year 2027", "2026-01-01T00:00:00.000+00:00", "year", 0, 8)]
