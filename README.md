@@ -78,7 +78,7 @@ Without labels you get dateparser's single date as it is. With labels you get th
 |---|---|
 | `DateValue` | `date`, `datetime` (a time of day, when written, is kept here) |
 | `PeriodValue` | `start`, `end` (**end excluded**: filter with `>= start AND < end`), `grain` (`week`, `month`, `quarter`, `year`, `weekend`, `year_to_date`…) |
-| `DurationValue` | `quantity` (int, or float for `2.5 days`), `unit` (`day`, `week`, `month`, `quarter`, `year`) |
+| `DurationValue` | `quantity` (int, or float for `2.5 days`), `unit` (`second`, `minute`, `hour`, `day`, `week`, `month`, `quarter`, `year`) |
 
 `result.to_dict()` is JSON-ready:
 
@@ -113,12 +113,15 @@ Without labels you get dateparser's single date as it is. With labels you get th
 
 | Reason | Meaning |
 |---|---|
-| `KIND_MISMATCH` | The `kind` label and dateparser's reading disagree, e.g. `period` but a single day was found |
+| `KIND_MISMATCH` | The `kind` label and dateparser's reading disagree: `period` but a single day was found, or `duration` for a date such as `tomorrow` |
+| `ANCHOR_MISMATCH` | `absolute`, but the text names no part of a date itself (`tomorrow`, `Wednesday`, `this month`) |
 | `DIRECTION_MISMATCH` | The `direction` label contradicts the text (`tomorrow` labelled `past`) |
 | `DAY_MISREAD` | dateparser returned another day than the one written (it reads `1st of the month` as the 27th) |
 | `MIXED_UNITS` | `two months and five days`: no single unit holds it exactly |
+| `FRACTION_NOT_SUPPORTED` | `1.5 months`, `in 1.5 years`: dateparser would read "1.5" as January 5 |
 | `MONTH_OVERFLOW_REJECTED` | You set `month_overflow="reject"`, and Jan 31 + 1 month has no Feb 31 |
 | `OUT_OF_RANGE` | Before year 1 or after year 9999, or a week 53 that does not exist |
+| `TOO_LONG` | More than 512 characters: a phrase, not a document |
 | none | The text is not a date this reader understands |
 
 ## Supported phrases
@@ -153,7 +156,7 @@ All examples are read with today being Tuesday, 2026-10-27.
 | Quarters | `Q3 2026`, `2026-Q3`, `first quarter of 2026`, `last quarter`, `this quarter` | 2026-07-01..2026-10-01, … |
 | ISO weeks | `2026-W43`, `week 43` | 2026-10-19..2026-10-26 |
 | Up to today | `year to date`, `month to date`, `week to date`, `YTD` | 2026-01-01..2026-10-28 (today included) |
-| Weekends | `last weekend`, `this weekend` | 2026-10-24..2026-10-26 (Saturday and Sunday) |
+| Weekends | `last weekend`, `this weekend` | 2026-10-24..2026-10-26, 2026-10-31..2026-11-02 (Saturday and Sunday) |
 | Week of a month | `the first week of September`, `the last week of September` | 2026-09-01..2026-09-08, 2026-09-24..2026-10-01 |
 
 ### Durations
@@ -163,8 +166,9 @@ The unit is kept.
 | Written | Examples | Value |
 |---|---|---|
 | Number and unit | `30 days`, `two weeks`, `3 months`, `one year`, `1 year 2 months` | 30 day, 2 week, 3 month, 1 year, 14 month |
-| Fractions | `2.5 days`, `1.5 weeks` | exact: 2.5 day, 1.5 week |
-| In words | `twenty-one days`, `a fortnight`, `a couple of days`, `half a year`, `one quarter` | 21 day, 2 week, 2 day, 6 month, 1 quarter |
+| Fractions | `2.5 days`, `1.5 weeks`, `1.5 fortnights` | exact: 2.5 day, 1.5 week, 3 week |
+| Times | `1 second`, `90 minutes`, `3 hours` | kept in that unit: 1 second, 90 minute, 3 hour |
+| In words | `twenty-one days`, `a week`, `a fortnight`, `a couple of days`, `half a year`, `one quarter` | 21 day, 1 week, 2 week, 2 day, 6 month, 1 quarter |
 
 ## Rules instead of guesses
 
@@ -254,10 +258,10 @@ Known limits:
 
 ```bash
 uv sync
-uv run pytest -q     # 301 passed, 6 xfailed
+uv run pytest -q     # 322 passed, 6 xfailed
 ```
 
-- **`tests/test_reader.py` and `tests/test_forms.py`** cover every supported form, the rules, the questions, columns, provenance and the JSON contract.
+- **`tests/test_reader.py`, `tests/test_forms.py` and `tests/test_review_gpt61.py`** cover every supported form, the rules, the questions, columns, provenance, the JSON contract, and each finding of the code reviews.
 - **`tests/test_spec_cases.py`** runs a reference set of 156 labelled cases (`tests/fixtures/`):
   - 150 pass.
   - The 6 known gaps above are marked `xfail(strict=True)` with their reason, so a case that starts passing fails the run until the list is updated.

@@ -45,7 +45,9 @@ DURATION_BASES = (datetime(2000, 1, 15), datetime(2001, 3, 20))
 DEFAULTS = {"week_start": "monday", "month_overflow": "clamp"}  # ISO 8601 weeks; dateparser's own month arithmetic
 WEEK_START_DAY = {"monday": 0, "sunday": 6}
 YEAR_FIRST = re.compile(r"\d{4}[-/.]")  # 2026-02-01: its shape fixes the order, no date_order applies
-NUMERIC_PAIR = re.compile(r"\d{1,2}\s*[-/.]\s*\d{1,2}")  # 01/02, 26.10.2026: where day/month order matters
+NUMERIC_PAIR = re.compile(  # 01/02, 26.10.2026: where day/month order matters; not "1.5 years"
+    r"\d{1,2}\s*[-/.]\s*\d{1,2}(?!\d*\s*(?:second|minute|hour|day|week|fortnight|month|quarter|year)s?\b)",
+    re.IGNORECASE)
 CONTEXT_FIELDS = {f.name for f in fields(TemporalContext)}
 SEARCH_LIMIT = 12 * 8  # months scanned for a next occurrence: covers February 29 (next leap year)
 WEEKDAY = r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues|tue|wed|thurs|thur|thu|fri|sat|sun"
@@ -53,19 +55,27 @@ WEEKDAY = r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues|tu
 RELATIVE_WEEKDAY = re.compile(rf"(next|coming|this|last|previous) ((?:{WEEKDAY})\.?)", re.IGNORECASE)
 WEEKDAY_DIRECTION = {"next": "future", "coming": "future", "this": None, "last": "past", "previous": "past"}
 # Lengths dateparser does not read, said in the units it does. A quarter is 3 months (converted back, see _QUARTERS).
+UNIT_WORD = r"(?:second|minute|hour|day|week|fortnight|month|quarter|year)s?\b"
+COUNT = r"(?<![\d.])(\d+(?:\.\d+)?)"  # a whole count: never the "5" of "1.5"
 LENGTH_WORDS = (
-    (re.compile(r"\b(\d+) fortnights?\b", re.IGNORECASE), lambda m: f"{2 * int(m[1])} weeks"),
-    (re.compile(r"\ba fortnight\b", re.IGNORECASE), lambda m: "2 weeks"),
-    (re.compile(r"\b(?:a )?couple(?: of)?\b", re.IGNORECASE), lambda m: "2"),
     (re.compile(r"\bhalf (?:a |an )?year\b", re.IGNORECASE), lambda m: "6 months"),
-    (re.compile(r"\b(\d+) quarters?\b(?! of)", re.IGNORECASE), lambda m: f"{3 * int(m[1])} months"),  # not "of an hour"
+    (re.compile(r"\b(?:a )?couple(?: of)?\b", re.IGNORECASE), lambda m: "2"),
+    (re.compile(rf"\b(?:a|an) (?={UNIT_WORD})", re.IGNORECASE), lambda m: "1 "),  # "a week" -> "1 week"
+    (re.compile(rf"{COUNT} fortnights?\b", re.IGNORECASE), lambda m: f"{_times(m[1], 2)} weeks"),
+    (re.compile(rf"{COUNT} quarters?\b(?! of)", re.IGNORECASE), lambda m: f"{_times(m[1], 3)} months"),  # not "of an hour"
 )
+# A duration keeps the unit it was written in, down to seconds (dateparser reports them as part of a day)
+TIME_UNITS = {"hour": 3_600_000_000, "minute": 60_000_000, "second": 1_000_000}
+# dateparser reads "1.5 days" right, but takes "1.5 years" for January 5: fractional months and years are not read
+FRACTIONAL_MONTHS = re.compile(r"\d+\.\d+\s*(?:month|quarter|year)s?\b", re.IGNORECASE)
+TIME_UNIT = re.compile(r"\b(hour|minute|second)s?\b", re.IGNORECASE)
 # "second" is a unit of time as well as an ordinal: text2num would turn "in a second" into "in a 2nd"
 SECOND = re.compile(r"\bseconds?\b", re.IGNORECASE)
 MONTH_NAMES = {m.lower() for m in month_name[1:] + month_abbr[1:]}
+TENS = {"twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"}  # "twenty second": an ordinal
 # One written day ("the 1st", "October 26th"): dateparser misreads some ("1st of the month" -> the 27th)
 ORDINAL_DAY = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)\b", re.IGNORECASE)
-_QUARTERS = LENGTH_WORDS[-1][0]
+_QUARTERS = re.compile(r"\bquarters?\b(?! of)", re.IGNORECASE)
 
 
 def read_temporal(
@@ -110,7 +120,7 @@ def read_temporal(
     source = Source(stripped, start, start + len(stripped))
     ref, ref_source = (ctx.reference_date, "session") if ctx.reference_date else (_today(), "system_clock")
     phrase, text_direction = _rewrite(stripped) if kind else (stripped, None)
-    quarters = kind == "duration" and bool(_QUARTERS.search(alpha2digit(stripped, "en", threshold=0)))
+    quarters = kind == "duration" and bool(_QUARTERS.search(stripped))
     labelled, defaults, policies = direction, [], {}
     if text_direction:  # "last Friday": the text says which one ("this Friday" does not: the label decides)
         direction = text_direction
@@ -152,6 +162,11 @@ def read_temporal(
         policies[name] = DEFAULTS[name]
         return DEFAULTS[name]
 
+    if len(phrase) > MAX_INPUT_CHARS:  # before the forms too: they read nested periods ("last week of" * n)
+        return done("not_temporal", reason="TOO_LONG")
+    if FRACTIONAL_MONTHS.search(phrase):
+        return done("not_temporal", reason="FRACTION_NOT_SUPPORTED")
+
     # Quarters, numbered weeks, "year to date", weekends, "the end of the month": built on dateparser (forms.py)
     if kind != "duration":
         def read_period(t):
@@ -160,6 +175,7 @@ def read_temporal(
                 return None
             policies.update(r.provenance.policies)  # what the period used is what this answer used
             defaults.extend(d for d in r.provenance.defaults if d not in defaults)
+            filled.extend(p for p in r.provenance.filled if p not in filled)  # "beginning of October": its year
             return r.value
         try:
             found = forms.read(phrase, ref=ref, direction=direction, week_start=lambda: setting("week_start"),
@@ -178,7 +194,7 @@ def read_temporal(
 
     # Day/month order: keep only the readings whose day and month come from the text. "03/15" read day first makes
     # dateparser take 15 as a year and invent the month, so it is dropped. Two real, different readings are asked.
-    if "DATE_ORDER" not in settings and NUMERIC_PAIR.search(phrase):
+    if "DATE_ORDER" not in settings and kind != "duration" and NUMERIC_PAIR.search(phrase):
         real = [o for o in ("MDY", "DMY") if _written(phrase, settings | {"DATE_ORDER": o}, ("month", "day"))]
         readings = {o: _parse(phrase, settings | {"DATE_ORDER": o}) for o in real}
         if len({r.date_obj.date() for r in readings.values()}) > 1:
@@ -195,12 +211,16 @@ def read_temporal(
         return done("not_temporal")
     moment = data.date_obj
     try:
-        if probing and (missing := _missing(phrase, settings, REQUIRED_PARTS[kind])):
+        a, b = _probe(phrase, settings) if probing else (None, None)
+        varying = [p for p in PARTS if a and b and getattr(a.date_obj, p) != getattr(b.date_obj, p)]
+        if len(varying) == len(PARTS):  # "tomorrow" labelled absolute: the text gave no part of a date itself
+            return done("not_temporal", reason="ANCHOR_MISMATCH", data=data)
+        if missing := [p for p in REQUIRED_PARTS.get(kind, ()) if p in varying]:
             # decided 2026-10-27: a missing day is the 1st; a missing year or month is the next occurrence after
             # the reference date (March 15 on 2026-10-27 is 2027-03-15)
             known = {p: getattr(moment, p) for p in PARTS if p not in missing}
             if kind == "period":
-                known.setdefault("day", 1)
+                known["day"] = 1  # a period starts on the 1st: never the probe's day, which would move the cutoff
             moment = datetime.combine(_fill(known, ref), moment.time())
             filled += missing
             uses_ref = any(p != "day" for p in missing)
@@ -213,6 +233,8 @@ def read_temporal(
         if kind == "period":
             value = _whole_period(d, data.period, setting("week_start") if data.period == "week" else None)
         elif kind == "duration":
+            if not re.search(r"\d", phrase):  # "tomorrow", "this month": a date, not a length
+                return done("not_temporal", reason="KIND_MISMATCH", data=data)
             value, reason = _duration(phrase, settings, data.period)
             if value is None:
                 return done("not_temporal", reason=reason, data=data)
@@ -253,7 +275,8 @@ def _rewrite(text: str) -> tuple[str, str | None]:
     units = []
     def keep_unit(m):  # "second" stays a word unless it is the ordinal of a day, week, quarter or month
         before, after = text[:m.start()].lower().split(), text[m.end():].lower()
-        if after.startswith((" of", " week", " quarter", " half")) or (before and before[-1] in MONTH_NAMES | {"the"}):
+        if after.startswith((" of", " week", " quarter", " half")) or (before and before[-1] in MONTH_NAMES | TENS | {"the"}) \
+                or text[max(m.start() - 1, 0)] == "-":  # "twenty-second"
             return m[0]
         units.append(m[0])
         return f"SECONDUNIT{len(units) - 1}"
@@ -350,8 +373,16 @@ def _duration(text, settings, precision) -> tuple[DurationValue | None, str | No
         return None, "KIND_MISMATCH"
     if quantities[0] != quantities[1]:
         return None, "MIXED_UNITS"  # e.g. months and days together: no single unit holds it exactly
-    q = quantities[0]
-    return DurationValue(int(q) if q.denominator == 1 else float(q), precision), None
+    q, unit = quantities[0], precision
+    if precision == "day" and (written := TIME_UNIT.findall(text)):  # "90 minutes": kept in minutes, not days
+        unit = min((u.lower() for u in written), key=TIME_UNITS.get)
+        q = q * Fraction(86_400_000_000, TIME_UNITS[unit])
+    return DurationValue(int(q) if q.denominator == 1 else float(q), unit), None
+
+
+def _times(count: str, n: int) -> str:
+    q = Fraction(count) * n
+    return str(int(q)) if q.denominator == 1 else str(float(q))
 
 
 def _measure(base: datetime, moment: datetime, precision: str | None) -> Fraction | None:

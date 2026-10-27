@@ -39,15 +39,18 @@ def read_column(values, *, context: TemporalContext | None = None) -> ColumnRead
         if len(decided) == 1:
             order, source = decided[0], "evidence"
         elif len(decided) == 2:
-            question = _question("ORDER_CONFLICT", evidence["MDY"][0], evidence["DMY"][0], conflict=True)
+            question = _question("ORDER_CONFLICT", evidence["MDY"][0], evidence["DMY"][0], context, conflict=True)
         elif both:
-            question = _question("DATE_ORDER_AMBIGUOUS", both[0], both[0])
+            question = _question("DATE_ORDER_AMBIGUOUS", both[0], both[0], context)
 
     out, filled = {}, {}
     for cell in cells:
         real = reads.get(cell)
-        if real and (question or (order and order not in real)):
-            out[cell] = None  # waiting on the question, or against the column's order (31/12 read month first)
+        if real and question and (cell in both or len(real) == 1):
+            out[cell] = None  # waiting on the question ("02/02/2026", read alike either way, does not wait)
+            continue
+        if real and order in ORDERS and order not in real:
+            out[cell] = None  # against the column's order (31/12 read month first)
             continue
         r = read_temporal(cell, context=replace(context, date_order=order) if order and real else context,
                           kind="date", anchor="absolute")
@@ -73,10 +76,10 @@ def _settings(order: str) -> dict:
     return {"PREFER_LOCALE_DATE_ORDER": False, "DATE_ORDER": order}
 
 
-def _question(reason: str, mdy_cell: str, dmy_cell: str, conflict: bool = False) -> Question:
-    def reading(cell, order):
-        d = _parse(cell, _settings(order))
-        return f"{SAYS[order]}, as in '{cell}' = {_say(d.date_obj.date())}" if d else SAYS[order]
+def _question(reason: str, mdy_cell: str, dmy_cell: str, context: TemporalContext, conflict: bool = False) -> Question:
+    def reading(cell, order):  # what choosing this order gives, with every rule applied (next occurrence...)
+        r = read_temporal(cell, context=replace(context, date_order=order), kind="date", anchor="absolute")
+        return f"{SAYS[order]}, as in '{cell}' = {_say(r.date)}" if r.date else SAYS[order]
     if conflict:
         text = (f"This column mixes orders: '{dmy_cell}' only reads day first, '{mdy_cell}' only month first. "
                 "Which order does the column use? Cells against it stay unread.")
