@@ -18,7 +18,7 @@ QUARTER_RELATIVE = re.compile(r"(last|previous|this|current|next) quarter")
 WEEK_NUMBER = re.compile(r"(?:the )?(?:week|wk\.?) ?(\d{1,2})(?:,? (?:of )?(\d{4}))?|(\d{4})-?w(\d{1,2})")
 TO_DATE = re.compile(r"(year|quarter|month|week)[ -]to[ -]date|([yqmw])td")
 WEEKEND = re.compile(r"(?:(last|previous|this) )?weekend|the weekend")
-DAY_OF = re.compile(r"(?:the )?(\d{1,2}(?:st|nd|rd|th)|first|last) day of (.+)")
+DAY_OF = re.compile(r"(?:the )?(\d{1,3}(?:st|nd|rd|th)|first|last)(?: day)? of,? (.+)")  # "the 15th of last month"
 PART = re.compile(r"(?:the )?(end|beginning|start|middle|mid)(?:-| of | )(.+)")
 NTH_WEEK = re.compile(r"(?:the )?(1st|2nd|3rd|4th|5th|last) week of (.+)")
 # "the end of the month": the month meant is the current one
@@ -27,8 +27,17 @@ UNITS_OF = {"y": "year", "q": "quarter", "m": "month", "w": "week"}
 WEEK_START_DAY = {"monday": 0, "sunday": 6}
 
 
+class PeriodNotRead(Exception):
+    """A form was recognised, but the period inside it was not read: the whole phrase is refused, for that reason."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
 def read(text, *, ref: date, direction: str | None, week_start, read_period):
-    """`week_start()` returns the session's week start (recording its default); `read_period(text)` reads a period."""
+    """`week_start()` returns the session's week start (recording its default); `read_period(text)` reads a period, or
+    raises PeriodNotRead: a recognised form is final, never handed on to another rule."""
     t = text.lower()
     if m := QUARTER.fullmatch(t):
         return _quarter(int(m[1] or m[2]), int(m[3]) if m[3] else None, ref, direction), "quarter", _year_filled(m[3]), False
@@ -49,16 +58,12 @@ def read(text, *, ref: date, direction: str | None, week_start, read_period):
         return _weekend(m[1] or ("last" if direction == "past" else "this"), ref), "weekend", (), True
     if m := NTH_WEEK.fullmatch(t):
         p = read_period(CURRENT.get(m[2], m[2]))
-        if p is None:
-            return None
         start = p.end - timedelta(days=7) if m[1] == "last" else p.start + timedelta(days=7 * (int(m[1][0]) - 1))
         if start < p.start or start >= p.end:
             raise ValueError(f"{m[1]} week of a {p.grain} does not exist")
         return PeriodValue(start, min(start + timedelta(days=7), p.end), "week"), "part_of_period", (), False
     if m := DAY_OF.fullmatch(t):  # "first day of next month", "the last day of the year"
         p = read_period(CURRENT.get(m[2], m[2]))
-        if p is None:
-            return None
         nth = 1 if m[1] == "first" else None if m[1] == "last" else int(m[1][:-2])
         d = p.end - timedelta(days=1) if nth is None else p.start + timedelta(days=nth - 1)
         if not p.start <= d < p.end:
@@ -66,8 +71,6 @@ def read(text, *, ref: date, direction: str | None, week_start, read_period):
         return DateValue(d, _midnight(d)), "part_of_period", (), False
     if m := PART.fullmatch(t):
         p = read_period(CURRENT.get(m[2], m[2]))
-        if p is None:
-            return None
         if m[1] == "end":
             return DateValue(p.end - timedelta(days=1), _midnight(p.end - timedelta(days=1))), "part_of_period", (), False
         if m[1] in ("beginning", "start"):

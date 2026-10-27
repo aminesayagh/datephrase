@@ -46,7 +46,7 @@ DEFAULTS = {"week_start": "monday", "month_overflow": "clamp"}  # ISO 8601 weeks
 WEEK_START_DAY = {"monday": 0, "sunday": 6}
 YEAR_FIRST = re.compile(r"\d{4}[-/.]")  # 2026-02-01: its shape fixes the order, no date_order applies
 NUMERIC_PAIR = re.compile(  # 01/02, 26.10.2026, "01 02 2026", "1,2,2026": day/month order matters; not "1.5 years"
-    r"(?<!\d)\d{1,2}(?:\s*[-/.,]\s*|\s+)\d{1,2}(?!\d)(?!\s*(?:second|minute|hour|day|week|fortnight|month|quarter|year)s?\b)",
+    r"(?<![\d:])\d{1,2}(?:\s*[-/.,]\s*|\s+)\d{1,2}(?![\d:])(?!\s*(?:second|minute|hour|day|week|fortnight|month|quarter|year)s?\b)",
     re.IGNORECASE)
 CONTEXT_FIELDS = {f.name for f in fields(TemporalContext)}
 SEARCH_LIMIT = 12 * 8  # months scanned for a next occurrence: covers February 29 (next leap year)
@@ -77,8 +77,10 @@ UNIT_SPELLINGS = {
     "year": ("years", "year", "yrs", "yr", "y"),  # one letter as dateparser reads it: "90m" is minutes, "5y" years
 }
 UNIT_OF = {spelling: unit for unit, spellings in UNIT_SPELLINGS.items() for spelling in spellings}
-NUMBER_AND_UNIT = re.compile(
-    rf"(?<![\w.])(\d*\.\d+|\d+)\s*-?\s*({'|'.join(sorted(UNIT_OF, key=len, reverse=True))})\b", re.IGNORECASE)
+_WORDS = "|".join(sorted((u for u in UNIT_OF if len(u) > 1), key=len, reverse=True))
+_LETTERS = "".join(u for u in UNIT_OF if len(u) == 1)
+NUMBER_AND_UNIT = re.compile(  # "90 mins", "2-week", "1.50hours"; one letter only right after its number: "90m", "1h30m"
+    rf"(?<![\d.])(\d*\.\d+|\d+)(?:\s*-?\s*({_WORDS})|([{_LETTERS}]))(?![a-z])", re.IGNORECASE)
 TIME_UNIT = re.compile(r"\b(hour|minute|second)s?\b", re.IGNORECASE)
 # "second" is a unit of time as well as an ordinal: text2num would turn "in a second" into "in a 2nd". It is read
 # once the other numbers are digits: "seconds" is the unit; "second" is the unit right after a count ("a second",
@@ -92,7 +94,9 @@ MONTH_WORD = re.compile(rf"\b(?:{'|'.join(m.lower() for m in month_name[1:] + mo
 ORDINAL_DAY = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)\b(?!\s*{UNIT_WORD}(?!\s+of\b))", re.IGNORECASE)
 # a duration is a run of "<number> <unit>": "3 days", "1 year 2 months", "3 weeks and 2 days", "2 hours ago"
 DURATION_SHAPE = re.compile(
-    r"(?:for )?(?:\d*\.?\d+ (?:second|minute|hour|day|week|month|year)s?(?:,? and |, | )?)+(?: ago)?", re.IGNORECASE)
+    r"(?:for )?(?:\d*\.?\d+ (?:second|minute|hour|day|week|month|year)s?(?:,? and |, ?| )?)+(?: ago)?", re.IGNORECASE)
+# a whole phrase that is one day of the month: "the 15th", "15th of the month", "the 1st at noon"
+LONE_DAY = re.compile(r"(?:the )?(\d{1,2})(?:st|nd|rd|th)(?: of (?:the|this) month)?(?:,? at (.+))?", re.IGNORECASE)
 _QUARTERS = re.compile(r"\bquarters?\b(?![\s-]+of\b)", re.IGNORECASE)
 
 
@@ -193,12 +197,31 @@ def read_temporal(
     if FRACTIONAL_MONTHS.search(phrase):
         return done("not_temporal", reason="FRACTION_NOT_SUPPORTED")
 
+    # A day alone ("the 1st", "the 15th of the month", "the 15th at noon"): that day at its next occurrence (its
+    # latest one when past). dateparser cannot be trusted with it: it reads "the 1st" ... "the 12th" as months.
+    if kind != "duration" and (lone := LONE_DAY.fullmatch(phrase)):
+        if kind == "period":
+            return done("not_temporal", reason="KIND_MISMATCH")  # a day is not a period
+        at = time()
+        if lone[2]:
+            clock = _parse(lone[2], {"PREFER_LOCALE_DATE_ORDER": False, "RELATIVE_BASE": datetime.combine(ref, time())})
+            if clock is None:
+                return done("not_temporal")
+            at = clock.date_obj.time()
+        try:
+            d = _fill({"day": int(lone[1])}, ref, past=direction == "past")
+        except ValueError:  # no month has that day ("the 32nd")
+            return done("not_temporal", reason="OUT_OF_RANGE")
+        filled += ["year", "month"]
+        uses_ref = True
+        return done("resolved", DateValue(d, datetime.combine(d, at)))
+
     # Quarters, numbered weeks, "year to date", weekends, "the end of the month": built on dateparser (forms.py)
     if kind != "duration":
         def read_period(t):
-            r = read_temporal(t, context=ctx, kind="period", anchor=anchor, direction=labelled)
+            r = read_temporal(t.lstrip(", "), context=ctx, kind="period", anchor=anchor, direction=labelled)
             if r.status != "resolved":
-                return None
+                raise forms.PeriodNotRead(r.reason or "PERIOD_NOT_READ")
             policies.update(r.provenance.policies)  # what the period used is what this answer used
             defaults.extend(d for d in r.provenance.defaults if d not in defaults)
             filled.extend(p for p in r.provenance.filled if p not in filled)  # "beginning of October": its year
@@ -208,6 +231,8 @@ def read_temporal(
                                read_period=read_period)
         except (ValueError, OverflowError):  # week 53 of a 52-week year, beyond year 9999
             return done("not_temporal", reason="OUT_OF_RANGE")
+        except forms.PeriodNotRead as refused:  # "the second day of next year" labelled absolute: refused whole
+            return done("not_temporal", reason=refused.reason)
         if found:
             value, form, form_filled, form_relative = found
             if anchor == "absolute" and form_relative:  # "next quarter", "this weekend": counted from today
@@ -220,30 +245,26 @@ def read_temporal(
                 return done("not_temporal", reason="DIRECTION_MISMATCH")
             return done("resolved", value)
 
-    # A day alone ("the 1st", "the 15th of the month"): that day at its next occurrence (its latest one when past).
-    # dateparser cannot be trusted with it: it reads "the 1st" ... "the 12th" as January ... December.
-    if kind != "duration" and (day := _lone_day(phrase)):
-        if kind == "period":
-            return done("not_temporal", reason="KIND_MISMATCH")  # a day is not a period
-        try:
-            d = _fill({"day": day}, ref, past=direction == "past")
-        except ValueError:  # no month has that day ("the 32nd")
-            return done("not_temporal", reason="OUT_OF_RANGE")
-        filled += ["year", "month"]
-        uses_ref = True
-        return done("resolved", DateValue(d, datetime.combine(d, time())))
-
     # Day/month order: keep only the readings whose day and month come from the text. "03/15" read day first makes
     # dateparser take 15 as a year and invent the month, so it is dropped. Two real, different readings are asked.
     if "DATE_ORDER" not in settings and kind != "duration" and NUMERIC_PAIR.search(phrase):
         real = [o for o in ("MDY", "DMY") if _written(phrase, settings | {"DATE_ORDER": o}, ("month", "day"))]
         readings = {o: _parse(phrase, settings | {"DATE_ORDER": o}) for o in real}
         if len({r.date_obj.date() for r in readings.values()}) > 1:
-            options = [(o, _label(text, context, kind, anchor, labelled, answers, origin_offset, o)) for o in real]
-            question = f"Does '{stripped}' mean {options[0][1]} or {options[1][1]}?"
-            return TemporalReadResult("ask", source, provenance(), request, reason="DATE_ORDER_AMBIGUOUS",
-                                      question=Question("DATE_ORDER_AMBIGUOUS", "date_order", question,
-                                                        "choice", tuple(options)))
+            # what each answer would give, with every other rule and label applied
+            outcomes = {o: read_temporal(text, context=context, kind=kind, anchor=anchor, direction=labelled,
+                                         answers=answers | {"date_order": o}, origin_offset=origin_offset)
+                        for o in real}
+            usable = [o for o in real if outcomes[o].status == "resolved"]
+            if not usable:  # both answers are refused anyway: no question, the refusal
+                return done("not_temporal", reason=outcomes[real[0]].reason)
+            if len(usable) == 2:
+                options = [(o, _label(outcomes[o], o)) for o in real]
+                question = f"Does '{stripped}' mean {options[0][1]} or {options[1][1]}?"
+                return TemporalReadResult("ask", source, provenance(), request, reason="DATE_ORDER_AMBIGUOUS",
+                                          question=Question("DATE_ORDER_AMBIGUOUS", "date_order", question,
+                                                            "choice", tuple(options)))
+            real = usable  # only one answer fits the labels: no question
         if len(real) == 1:
             settings["DATE_ORDER"] = real[0]
 
@@ -274,9 +295,10 @@ def read_temporal(
         if kind == "period":
             value = _whole_period(d, data.period, setting("week_start") if data.period == "week" else None)
         elif kind == "duration":
-            if not DURATION_SHAPE.fullmatch(phrase):  # "tomorrow", "yesterday at 12:00": a date, not a length
+            length = re.sub(r"\s*&\s*", " and ", phrase).rstrip(". ")  # "3 days & 2 hours", "3 days."
+            if not DURATION_SHAPE.fullmatch(length):  # "tomorrow", "yesterday at 12:00": a date, not a length
                 return done("not_temporal", reason="KIND_MISMATCH", data=data)
-            value, reason = _duration(phrase, settings, data.period)
+            value, reason = _duration(length, settings, data.period)
             if value is None:
                 return done("not_temporal", reason=reason, data=data)
             if quarters and value.unit == "month" and value.quantity % 3 == 0:  # said in quarters: kept in quarters
@@ -322,14 +344,15 @@ def _rewrite(text: str, kind: str | None) -> tuple[str, str | None, bool]:
         held = f"SECONDHELD{i}"
         before = text[:text.index(held)]
         counted = COUNTED.search(before)
-        if word.lower() == "seconds" or (counted and not (kind != "duration" and counted[1] and _round_ten(counted[1]))):
+        compound = kind != "duration" and counted and counted[1] and _round_ten(counted[1]) and MONTH_WORD.search(text)
+        if word.lower() == "seconds" or (counted and not compound):
             text = text.replace(held, word, 1)  # the unit: "a second", "2 seconds"
-        elif counted and counted[1]:  # "October 20 second" -> "October 22nd": a round ten, then the ordinal
+        elif compound:  # "October 20 second" -> "October 22nd": a round ten then "second", in a date naming a month
             n = int(counted[1]) + 2
             text = text[:counted.start(1)] + f"{n}nd" + text[counted.end(1):].replace(f" {held}", "", 1)
         else:
             text = text.replace(held, "2nd", 1)  # the ordinal: "the second", "second May"
-    text = NUMBER_AND_UNIT.sub(_spell_unit, text)
+    text = " ".join(NUMBER_AND_UNIT.sub(_spell_unit, text).split())
     quarters = bool(_QUARTERS.search(text))  # "1 quarter", "2 quarters" (spelled out), not "a quarter of an hour"
     for pattern, said in LENGTH_WORDS:
         text = pattern.sub(said, text)
@@ -391,22 +414,13 @@ def _fill(known: dict, ref: date, past: bool = False) -> date:
 
 def _spell_unit(m) -> str:
     number = "0" + m[1] if m[1].startswith(".") else m[1]
-    unit = UNIT_OF[m[2].lower()]
-    return f"{number} {unit if Fraction(number) == 1 else unit + 's'}"
+    unit = UNIT_OF[(m[2] or m[3]).lower()]
+    glued = m.string[m.end():m.end() + 1].isdigit()  # "1h30m": "1 hour 30 minutes"
+    return f"{number} {unit if Fraction(number) == 1 else unit + 's'}" + (" " if glued else "")
 
 
-def _lone_day(phrase: str) -> int | None:
-    """The day of a phrase whose only number is one ordinal day and that names no month: "the 1st", "the 15th"."""
-    days = ORDINAL_DAY.findall(phrase)
-    if len(days) == 1 and len(re.findall(r"\d+", phrase)) == 1 and not MONTH_WORD.search(phrase):
-        return int(days[0])
-    return None
-
-
-def _label(text, context, kind, anchor, direction, answers, origin_offset, order) -> str:
-    """How one day/month reading reads to the user, after every other rule (next occurrence...) is applied."""
-    r = read_temporal(text, context=context, kind=kind, anchor=anchor, direction=direction,
-                      answers=answers | {"date_order": order}, origin_offset=origin_offset)
+def _label(r: TemporalReadResult, order: str) -> str:
+    """How one day/month reading reads to the user: the value that answer gives, every rule applied."""
     if isinstance(r.value, DateValue):
         return _say(r.value.date)
     if isinstance(r.value, PeriodValue):
