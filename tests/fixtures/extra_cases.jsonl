@@ -1,0 +1,55 @@
+{"id": "X01", "input": "Mon, 26 Oct 2026", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-10-26"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X02", "input": "Tuesday, October 26, 2026", "context": "C0", "status": "invalid", "code": "WEEKDAY_MISMATCH", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X03", "input": "the 26th of October 2026", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-10-26"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X04", "input": "October twenty-sixth, 2026", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-10-26"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X05", "input": "26.10.2026", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-10-26"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X06", "input": "26-10-2026", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-10-26"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X07", "input": "02/02/2026", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-02-02"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X08", "input": "31/04/2026", "context": "C0", "status": "invalid", "code": "INVALID_CALENDAR_DATE", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X09", "input": "13/13/2026", "context": "C0", "status": "invalid", "code": "INVALID_CALENDAR_DATE", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X10", "input": "01/02/26", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_TWO_DIGIT_YEAR", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X11", "input": "Oct 26 26", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_TWO_DIGIT_YEAR", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X12", "input": "October 26rd 2026", "context": "C0", "status": "invalid", "code": "INVALID_ORDINAL", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X13", "input": "February 29", "context": "C0", "status": "needs_context", "code": "YEAR_REQUIRED", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X14", "input": "February 30", "context": "C0", "status": "invalid", "code": "INVALID_CALENDAR_DATE", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X15", "input": "2025-02-29", "context": "C0", "status": "invalid", "code": "INVALID_CALENDAR_DATE", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X16", "input": "2028-02-29", "context": "NOBASE", "status": "resolved", "value": {"kind": "date", "date": "2028-02-29"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X17", "input": "Q3 2026", "context": "NOBASE", "status": "resolved", "value": {"kind": "range", "start": "2026-07-01", "end": "2026-10-01", "end_exclusive": true, "grain": "quarter"}, "classification": {"kind": "period", "anchor": "absolute"}}
+{"id": "X18", "input": "2026-W44", "context": "NOBASE", "status": "resolved", "value": {"kind": "range", "start": "2026-10-26", "end": "2026-11-02", "end_exclusive": true, "grain": "week"}, "classification": {"kind": "period", "anchor": "absolute"}}
+{"id": "X19", "input": "in 2026", "context": "NOBASE", "status": "resolved", "value": {"kind": "range", "start": "2026-01-01", "end": "2027-01-01", "end_exclusive": true, "grain": "year"}, "classification": {"kind": "period", "anchor": "absolute"}}
+{"id": "X20", "input": "2026", "context": "C0", "status": "needs_context", "code": "TEMPORAL_ROLE_UNCLEAR", "classification": {"kind": "period", "anchor": "absolute"}}
+{"id": "X21", "input": "2026", "context": "ESTABLISHED", "status": "resolved", "value": {"kind": "range", "start": "2026-01-01", "end": "2027-01-01", "end_exclusive": true, "grain": "year"}, "classification": {"kind": "period", "anchor": "absolute"}}
+{"id": "X22", "input": "this year", "context": "C0", "status": "resolved", "value": {"kind": "range", "start": "2026-01-01", "end": "2027-01-01", "end_exclusive": true, "grain": "year"}, "classification": {"kind": "period", "anchor": "relative", "direction": null}}
+{"id": "X23", "input": "next year", "context": "C0", "status": "resolved", "value": {"kind": "range", "start": "2027-01-01", "end": "2028-01-01", "end_exclusive": true, "grain": "year"}, "classification": {"kind": "period", "anchor": "relative", "direction": "future"}}
+{"id": "X24", "input": "in 0 days", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-10-26"}, "classification": {"kind": "date", "anchor": "relative", "direction": null}}
+{"id": "X25", "input": "a week ago", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-10-19"}, "classification": {"kind": "date", "anchor": "relative", "direction": "past"}}
+{"id": "X26", "input": "3 weeks from now", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-11-16"}, "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "X27", "input": "the day after tomorrow", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-10-28"}, "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "X28", "input": "half a month", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_FRACTIONAL_DURATION", "classification": {"kind": "duration", "anchor": null}}
+{"id": "X29", "input": "two and a half weeks", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_FRACTIONAL_DURATION", "classification": {"kind": "duration", "anchor": null}}
+{"id": "X30", "input": "a month and a half", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_FRACTIONAL_DURATION", "classification": {"kind": "duration", "anchor": null}}
+{"id": "X31", "input": "1 year 2 months", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_COMPOUND_DURATION", "classification": {"kind": "duration", "anchor": null}}
+{"id": "X32", "input": "in 2 weeks and 3 days", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_COMPOUND_DURATION", "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "X33", "input": "in 3 hours", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_PRECISION", "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "X34", "input": "tomorrow at 5pm", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_PRECISION", "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "X35", "input": "2026-10-26T14:30:00Z", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_PRECISION", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X36", "input": "past month", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_ROLLING_PERIOD", "classification": {"kind": "period", "anchor": "relative", "direction": "past"}}
+{"id": "X37", "input": "last 30 days", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_ROLLING_PERIOD", "classification": {"kind": "period", "anchor": "relative", "direction": "past"}}
+{"id": "X38", "input": "since March", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_RANGE", "classification": {"kind": "period", "anchor": "absolute"}}
+{"id": "X39", "input": "between March and May", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_RANGE", "classification": {"kind": "period", "anchor": "absolute"}}
+{"id": "X40", "input": "every Monday", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_RECURRENCE", "classification": {"kind": "date", "anchor": "relative", "direction": null}}
+{"id": "X41", "input": "fiscal Q3", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_FISCAL_CALENDAR", "classification": {"kind": "period", "anchor": "absolute"}}
+{"id": "X42", "input": "several days", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_VAGUE_QUANTITY", "classification": {"kind": "duration", "anchor": null}}
+{"id": "X43", "input": "SKU 2026-10", "context": "C0", "status": "not_temporal", "classification": null}
+{"id": "X44", "input": "order 01/02", "context": "C0", "status": "not_temporal", "classification": null}
+{"id": "X45", "input": "June", "context": "C0", "status": "needs_context", "code": "YEAR_REQUIRED", "classification": {"kind": "period", "anchor": "absolute"}}
+{"id": "X46", "input": "March", "context": "C0", "status": "needs_context", "code": "TEMPORAL_ROLE_UNCLEAR", "classification": {"kind": "period", "anchor": "absolute"}}
+{"id": "X47", "input": "next Monday", "context": "STRICT", "status": "resolved", "value": {"kind": "date", "date": "2026-11-02"}, "policies": ["weekday:strict_next"], "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "X48", "input": "last week", "context": "SUNDAY", "status": "resolved", "value": {"kind": "range", "start": "2026-10-18", "end": "2026-10-25", "end_exclusive": true, "grain": "week"}, "policies": ["week_start:sunday"], "classification": {"kind": "period", "anchor": "relative", "direction": "past"}}
+{"id": "X49", "input": "in one month", "context": "JAN31_REJECT", "status": "invalid", "code": "INVALID_CALENDAR_DATE", "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "X50", "input": "March 15", "context": "CURYEAR", "status": "resolved", "value": {"kind": "date", "date": "2026-03-15"}, "policies": ["missing_year:current_reference_year"], "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X51", "input": "this week", "context": "NOWEEK", "status": "needs_context", "code": "WEEK_START_REQUIRED", "classification": {"kind": "period", "anchor": "relative", "direction": null}}
+{"id": "X52", "input": "3 months ago", "context": "LEAP", "status": "resolved", "value": {"kind": "date", "date": "2023-11-29"}, "classification": {"kind": "date", "anchor": "relative", "direction": "past"}}
+{"id": "X53", "input": "in one quarter", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2027-01-26"}, "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "X54", "input": "Sept. 5, 2026", "context": "NOBASE", "status": "resolved", "value": {"kind": "date", "date": "2026-09-05"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "X55", "input": "5th of September, 2026", "context": "NOBASE", "status": "resolved", "value": {"kind": "date", "date": "2026-09-05"}, "classification": {"kind": "date", "anchor": "absolute"}}

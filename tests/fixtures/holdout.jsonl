@@ -1,0 +1,35 @@
+{"id": "H01", "input": "3rd March 2026", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-03-03"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H02", "input": "Mar 3, 2026", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-03-03"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H03", "input": "2027-12-31", "context": "NOBASE", "status": "resolved", "value": {"kind": "date", "date": "2027-12-31"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H04", "input": "1900-02-29", "context": "C0", "status": "invalid", "code": "INVALID_CALENDAR_DATE", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H05", "input": "2000-02-29", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2000-02-29"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H06", "input": "29/02/2028", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2028-02-29"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H07", "input": "05/06/2027", "context": "C0", "status": "ambiguous", "candidates": [{"kind": "date", "date": "2027-05-06"}, {"kind": "date", "date": "2027-06-05"}], "code": "DATE_ORDER_AMBIGUOUS", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H08", "input": "05/06/2027", "context": "MDY", "status": "resolved", "value": {"kind": "date", "date": "2027-05-06"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H09", "input": "12/12/2026", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-12-12"}, "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H10", "input": "June 2027", "context": "C0", "status": "resolved", "value": {"kind": "range", "start": "2027-06-01", "end": "2027-07-01", "end_exclusive": true, "grain": "month"}, "classification": {"kind": "period", "anchor": "absolute"}}
+{"id": "H11", "input": "December 2026", "context": "NOBASE", "status": "resolved", "value": {"kind": "range", "start": "2026-12-01", "end": "2027-01-01", "end_exclusive": true, "grain": "month"}, "classification": {"kind": "period", "anchor": "absolute"}}
+{"id": "H12", "input": "in four days", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-10-30"}, "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "H13", "input": "ten days ago", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-10-16"}, "classification": {"kind": "date", "anchor": "relative", "direction": "past"}}
+{"id": "H14", "input": "in one week", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-11-02"}, "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "H15", "input": "six months", "context": "C0", "status": "resolved", "value": {"kind": "duration", "quantity": 6, "unit": "month"}, "classification": {"kind": "duration", "anchor": null}}
+{"id": "H16", "input": "two quarters ago", "context": "C0", "status": "resolved", "value": {"kind": "date", "date": "2026-04-26"}, "classification": {"kind": "date", "anchor": "relative", "direction": "past"}}
+{"id": "H17", "input": "in one year", "context": "JAN31", "status": "resolved", "value": {"kind": "date", "date": "2027-01-31"}, "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "H18", "input": "one month ago", "context": "MAR31", "status": "resolved", "value": {"kind": "date", "date": "2026-02-28"}, "policies": ["month_overflow:clamp"], "classification": {"kind": "date", "anchor": "relative", "direction": "past"}}
+{"id": "H19", "input": "one month ago", "context": "MAR31_NOPOLICY", "status": "needs_context", "code": "MONTH_OVERFLOW_POLICY_REQUIRED", "classification": {"kind": "date", "anchor": "relative", "direction": "past"}}
+{"id": "H20", "input": "next quarter", "context": "DEC15", "status": "resolved", "value": {"kind": "range", "start": "2027-01-01", "end": "2027-04-01", "end_exclusive": true, "grain": "quarter"}, "classification": {"kind": "period", "anchor": "relative", "direction": "future"}}
+{"id": "H21", "input": "last month", "context": "JAN10", "status": "resolved", "value": {"kind": "range", "start": "2025-12-01", "end": "2026-01-01", "end_exclusive": true, "grain": "month"}, "classification": {"kind": "period", "anchor": "relative", "direction": "past"}}
+{"id": "H22", "input": "this week", "context": "SUNDAY", "status": "resolved", "value": {"kind": "range", "start": "2026-10-25", "end": "2026-11-01", "end_exclusive": true, "grain": "week"}, "classification": {"kind": "period", "anchor": "relative", "direction": null}}
+{"id": "H23", "input": "batch 2026-10", "context": "C0", "status": "not_temporal", "classification": null}
+{"id": "H24", "input": "version 12/2026", "context": "C0", "status": "not_temporal", "classification": null}
+{"id": "H25", "input": "June owns the store", "context": "C0", "status": "not_temporal", "classification": null}
+{"id": "H26", "input": "in five days", "context": "NOBASE", "status": "needs_context", "code": "REFERENCE_DATE_REQUIRED", "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "H27", "input": "July 4", "context": "C0", "status": "needs_context", "code": "YEAR_REQUIRED", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H28", "input": "2026-10-26 08:00", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_PRECISION", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H29", "input": "three weeks and two days", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_COMPOUND_DURATION", "classification": {"kind": "duration", "anchor": null}}
+{"id": "H30", "input": "0.5 years", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_FRACTIONAL_DURATION", "classification": {"kind": "duration", "anchor": null}}
+{"id": "H31", "input": "26/10/26", "context": "C0", "status": "unsupported", "code": "UNSUPPORTED_TWO_DIGIT_YEAR", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H32", "input": "next Friday", "context": "STRICT", "status": "resolved", "value": {"kind": "date", "date": "2026-10-30"}, "policies": ["weekday:strict_next"], "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "H33", "input": "Wednesday", "context": "C0", "status": "needs_context", "code": "WEEKDAY_POLICY_REQUIRED", "classification": {"kind": "date", "anchor": "relative", "direction": "future"}}
+{"id": "H34", "input": "31 June 2026", "context": "C0", "status": "invalid", "code": "INVALID_CALENDAR_DATE", "classification": {"kind": "date", "anchor": "absolute"}}
+{"id": "H35", "input": "the 3rd of March, 2026", "context": "DMY", "status": "resolved", "value": {"kind": "date", "date": "2026-03-03"}, "classification": {"kind": "date", "anchor": "absolute"}}
