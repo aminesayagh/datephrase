@@ -1,6 +1,6 @@
 # temporal-reader
 
-A thin wrapper over [dateparser](https://dateparser.readthedocs.io/) 1.4.3 (BSD-3-Clause, actively maintained), for English input.
+A thin wrapper over [dateparser](https://dateparser.readthedocs.io/) 1.4.3 (BSD-3-Clause, actively maintained), for English input. Number words go through [text2num](https://github.com/allo-media/text2num) 3.1.0 (MIT).
 
 - dateparser reads the text.
 - The caller's classification (`kind`, `anchor`, `direction`) decides what shape the answer takes.
@@ -77,6 +77,52 @@ The reader keeps no state between calls. An `ask` result's JSON carries a `reque
 
 `answer(that_json, "DMY")` accepts only an offered option's value. Anything else raises `TemporalConfigError`.
 
+## Beyond dateparser
+
+dateparser reads none of the following. They are built on top of it.
+
+**Rewrites (classified text only, recorded in `provenance.text_read`)**
+
+| Written | Read as |
+|---|---|
+| Number words, via text2num | `October twenty-sixth` becomes "October 26th"; `the first of March` becomes "the 1st of March"; `twenty-one days` becomes "21 days" |
+| next / last / this + weekday | `next Monday` becomes "Monday" plus future; `last Friday` becomes "Friday" plus past |
+| `a fortnight`, `a couple of days`, `half a year` | 2 weeks, 2 days, 6 months |
+| `one quarter` (a duration) | 3 months, then returned as 1 quarter |
+
+**Forms (`forms.py`, recorded in `provenance.form`; examples on 2026-10-27)**
+
+| Form | Examples | Value |
+|---|---|---|
+| `quarter` | `Q3 2026`, `2026-Q3`, `first quarter of 2026`, `last quarter`, `this quarter` | Period. Without a year: the latest one if past, else the next one. |
+| `week_number` | `2026-W43`, `week 43` | ISO week, Monday start |
+| `to_date` | `year to date`, `month to date`, `week to date`, `YTD` | Period from the start through today: `[2026-01-01, 2026-10-28)` |
+| `weekend` | `last weekend`, `this weekend` | Saturday and Sunday: `[2026-10-24, 2026-10-26)` |
+| `part_of_period` | `end of the month`, `the beginning of next week`, `mid-October`, `the first week of September` | A date (the last day, the first day, or the 15th / the middle), or a 7-day period |
+
+**Not read, by decision:**
+
+- `2 business days`: no business calendar.
+- `the summer`: depends on the hemisphere.
+- `Christmas`: no holiday calendars.
+- `next weekend`: it could be this weekend or the one after.
+
+## Reading a column of cells
+
+`read_column(values, context=None)` reads an uploaded file's date column with **one** day/month order:
+
+```python
+r = read_column(["01/10/2026", "26.10.2026", "05/11/2026"])
+r.order, r.order_source     # "DMY", "evidence"  (26.10.2026 only reads day first)
+r.cells                     # {"01/10/2026": "2026-10-01", "26.10.2026": "2026-10-26", "05/11/2026": "2026-11-05"}
+```
+
+- The order comes from `context.date_order`, or else from evidence: a cell only one order reads (a day over 12) settles the column.
+- With no evidence and a cell that both orders read differently, there is **one question for the column**, never one per cell. To answer it, read the column again with `TemporalContext(date_order=<the chosen value>)`.
+- Cells that contradict each other (`26/10/2026` beside `10/26/2026`) get one `ORDER_CONFLICT` question.
+- Cells that don't depend on the order (`2026-10-26`, `26 Oct 2026`) are always read. A cell against the order, or not a date, is `None`.
+- Each distinct cell is read once. A cell missing its year gets the next occurrence, listed in `filled`.
+
 ## Classification from the caller
 
 | Label | Values | Effect |
@@ -109,14 +155,14 @@ A resolved result also carries:
 
 `tests/test_spec_cases.py` sends the brief's 156 cases, each with the classification a correct classifier gives it. Expected values that the decisions above change are written by hand:
 
-- **`DECIDED` (15 cases):** next occurrence, today's date, the defaults, and the direction.
+- **`DECIDED` (16 cases):** next occurrence, today's date, the defaults, and the direction.
 - **`ACCEPTED` (25 cases):** the brief's "unsupported" inputs. Each one must be dateparser's correct reading, or an honest `not_temporal` / `ask`; never another value.
 
-**133 pass, 23 are known failures.** Each failure carries its reason in `KNOWN`:
+**150 pass, 6 are known failures.** Each failure carries its reason in `KNOWN`:
 
 | Count | Cause |
 |---|---|
-| 18 | dateparser does not read the text: quarters (9), `next` + weekday (4), number words such as `twenty-one days` (4), ISO week (1) |
+| 1 | a year in words: `twenty twenty-six` becomes "20 26" in text2num |
 | 3 | dateparser accepts something wrong: `2026-13-01` (month and day swapped), a weekday that contradicts the date, the suffix in `26rd` |
 | 1 | `2 weeks later`: counted from the reference date, where the brief asks "later than what?" |
 | 1 | the label conflicts with the brief: `2026` labelled `period` returns the year, while the brief asks for its role |
@@ -127,5 +173,5 @@ The failures are marked `strict`: a case that starts passing fails the run, so t
 
 ```bash
 uv sync
-uv run pytest -q     # 214 passed, 23 xfailed
+uv run pytest -q     # 282 passed, 6 xfailed
 ```

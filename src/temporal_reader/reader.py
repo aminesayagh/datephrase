@@ -11,7 +11,9 @@ from importlib.metadata import version
 
 from dateparser.date import DateDataParser
 from dateutil.relativedelta import relativedelta
+from text_to_num import alpha2digit
 
+from . import forms
 from .models import (
     ANCHORS,
     DIRECTIONS,
@@ -46,6 +48,19 @@ YEAR_FIRST = re.compile(r"\d{4}[-/.]")  # 2026-02-01: its shape fixes the order,
 NUMERIC_PAIR = re.compile(r"\d{1,2}\s*[-/.]\s*\d{1,2}")  # 01/02, 26.10.2026: where day/month order matters
 CONTEXT_FIELDS = {f.name for f in fields(TemporalContext)}
 SEARCH_LIMIT = 12 * 8  # months scanned for a next occurrence: covers February 29 (next leap year)
+WEEKDAY = r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues|tue|wed|thurs|thur|thu|fri|sat|sun"
+# "next Monday" is not read by dateparser; "Monday" is, and "next" / "last" say which one
+RELATIVE_WEEKDAY = re.compile(rf"(next|coming|this|last|previous) ((?:{WEEKDAY})\.?)", re.IGNORECASE)
+WEEKDAY_DIRECTION = {"next": "future", "coming": "future", "this": "future", "last": "past", "previous": "past"}
+# Lengths dateparser does not read, said in the units it does. A quarter is 3 months (converted back, see _QUARTERS).
+LENGTH_WORDS = (
+    (re.compile(r"\b(\d+) fortnights?\b", re.IGNORECASE), lambda m: f"{2 * int(m[1])} weeks"),
+    (re.compile(r"\ba fortnight\b", re.IGNORECASE), lambda m: "2 weeks"),
+    (re.compile(r"\b(?:a )?couple(?: of)?\b", re.IGNORECASE), lambda m: "2"),
+    (re.compile(r"\bhalf (?:a |an )?year\b", re.IGNORECASE), lambda m: "6 months"),
+    (re.compile(r"\b(\d+) quarters?\b", re.IGNORECASE), lambda m: f"{3 * int(m[1])} months"),
+)
+_QUARTERS = LENGTH_WORDS[-1][0]
 
 
 def read_temporal(
@@ -89,13 +104,17 @@ def read_temporal(
     start = origin_offset + len(text) - len(text.lstrip())
     source = Source(stripped, start, start + len(stripped))
     ref, ref_source = (ctx.reference_date, "session") if ctx.reference_date else (_today(), "system_clock")
+    phrase, text_direction = _rewrite(stripped) if kind else (stripped, None)
+    quarters = kind == "duration" and bool(_QUARTERS.search(alpha2digit(stripped, "en", threshold=0)))
     labelled, defaults, policies = direction, [], {}
-    if anchor == "relative" and direction is None:  # decided 2026-10-27: a relative date without a label is future
+    if text_direction:  # "last Friday": the text says which one
+        direction = text_direction
+    elif anchor == "relative" and direction is None:  # decided 2026-10-27: a relative date without a label is future
         direction = "future"
         defaults.append("direction:future")
 
     settings = {"PREFER_LOCALE_DATE_ORDER": False}
-    if YEAR_FIRST.match(stripped):
+    if YEAR_FIRST.match(phrase):
         settings["DATE_ORDER"] = "YMD"
     elif ctx.date_order:
         settings["DATE_ORDER"] = ctx.date_order
@@ -109,11 +128,12 @@ def read_temporal(
     else:
         settings["RELATIVE_BASE"] = datetime.combine(ref, time())
     uses_ref = kind != "duration" and not probing
-    filled = []
+    filled, form = [], None
 
     def provenance():
         return Provenance(BACKEND, _jsonable(settings), ref if uses_ref else None, ref_source if uses_ref else None,
-                          kind, anchor, labelled, tuple(filled), tuple(defaults), dict(policies))
+                          kind, anchor, labelled, tuple(filled), tuple(defaults), dict(policies),
+                          phrase if phrase != stripped else None, form)
 
     def done(status, value=None, reason=None, data=None):
         return TemporalReadResult(status, source, provenance(), request, value=value, reason=reason,
@@ -127,11 +147,30 @@ def read_temporal(
         policies[name] = DEFAULTS[name]
         return DEFAULTS[name]
 
+    # Quarters, numbered weeks, "year to date", weekends, "the end of the month": built on dateparser (forms.py)
+    if kind != "duration":
+        def read_period(t):
+            r = read_temporal(t, context=ctx, kind="period", anchor=anchor, direction=labelled)
+            return r.value if r.status == "resolved" else None
+        try:
+            found = forms.read(phrase, ref=ref, direction=direction, week_start=lambda: setting("week_start"),
+                               read_period=read_period)
+        except (ValueError, OverflowError):  # week 53 of a 52-week year, beyond year 9999
+            return done("not_temporal", reason="OUT_OF_RANGE")
+        if found:
+            value, form = found
+            uses_ref = True
+            if kind and value.kind != kind:
+                return done("not_temporal", reason="KIND_MISMATCH")
+            if labelled and value.kind == "date" and (value.date < ref if labelled == "future" else value.date > ref):
+                return done("not_temporal", reason="DIRECTION_MISMATCH")
+            return done("resolved", value)
+
     # Day/month order: keep only the readings whose day and month come from the text. "03/15" read day first makes
     # dateparser take 15 as a year and invent the month, so it is dropped. Two real, different readings are asked.
-    if "DATE_ORDER" not in settings and NUMERIC_PAIR.search(stripped):
-        real = [o for o in ("MDY", "DMY") if _written(stripped, settings | {"DATE_ORDER": o}, ("month", "day"))]
-        readings = {o: _parse(stripped, settings | {"DATE_ORDER": o}) for o in real}
+    if "DATE_ORDER" not in settings and NUMERIC_PAIR.search(phrase):
+        real = [o for o in ("MDY", "DMY") if _written(phrase, settings | {"DATE_ORDER": o}, ("month", "day"))]
+        readings = {o: _parse(phrase, settings | {"DATE_ORDER": o}) for o in real}
         if len({r.date_obj.date() for r in readings.values()}) > 1:
             options = [(o, _label(text, context, kind, anchor, labelled, answers, origin_offset, o)) for o in real]
             question = f"Does '{stripped}' mean {options[0][1]} or {options[1][1]}?"
@@ -141,12 +180,12 @@ def read_temporal(
         if len(real) == 1:
             settings["DATE_ORDER"] = real[0]
 
-    data = _parse(stripped, settings)
+    data = _parse(phrase, settings)
     if data is None:
         return done("not_temporal")
     moment = data.date_obj
     try:
-        if probing and (missing := _missing(stripped, settings, REQUIRED_PARTS[kind])):
+        if probing and (missing := _missing(phrase, settings, REQUIRED_PARTS[kind])):
             # decided 2026-10-27: a missing day is the 1st; a missing year or month is the next occurrence after
             # the reference date (March 15 on 2026-10-27 is 2027-03-15)
             known = {p: getattr(moment, p) for p in PARTS if p not in missing}
@@ -164,9 +203,12 @@ def read_temporal(
         if kind == "period":
             value = _whole_period(d, data.period, setting("week_start") if data.period == "week" else None)
         elif kind == "duration":
-            value, reason = _duration(stripped, settings, data.period)
+            value, reason = _duration(phrase, settings, data.period)
             if value is None:
                 return done("not_temporal", reason=reason, data=data)
+            if quarters and value.unit == "month" and value.quantity % 3 == 0:  # said in quarters: kept in quarters
+                q = Fraction(value.quantity) / 3
+                value = DurationValue(int(q) if q.denominator == 1 else float(q), "quarter")
         else:
             value = DateValue(d, moment)
     except (ValueError, OverflowError):  # beyond year 1..9999
@@ -190,6 +232,17 @@ def answer(asked: TemporalReadResult | dict, value) -> TemporalReadResult:
     return read_temporal(req["text"], context=TemporalContext.from_dict(req["context"]), kind=req["kind"],
                          anchor=req["anchor"], direction=req["direction"], answers=req["answers"] | {q["field"]: value},
                          origin_offset=req["origin_offset"])
+
+
+def _rewrite(text: str) -> tuple[str, str | None]:
+    """The text in words dateparser reads, and the direction it states, if any. Numbers in words become digits
+    (text2num: "October twenty-sixth" -> "October 26th")."""
+    text = alpha2digit(text, "en", threshold=0)
+    for pattern, said in LENGTH_WORDS:
+        text = pattern.sub(said, text)
+    if m := RELATIVE_WEEKDAY.fullmatch(text):
+        return m[2], WEEKDAY_DIRECTION[m[1].lower()]
+    return text, None
 
 
 def _today() -> date:

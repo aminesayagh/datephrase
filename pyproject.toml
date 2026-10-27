@@ -1,7 +1,7 @@
 [project]
 name = "temporal-reader"
 version = "0.1.0"
-description = "Thin wrapper over dateparser: English date expressions to a serialized date with metadata"
+description = "Thin wrapper over dateparser: English date expressions to typed, serialized dates, periods and durations"
 readme = "README.md"
 authors = [
     { name = "aminesayagh", email = "aminesayagh1997@gmail.com" }
@@ -10,6 +10,7 @@ requires-python = ">=3.13"
 dependencies = [
     "dateparser==1.4.3",
     "python-dateutil==3.0.0",
+    "text2num==3.1.0",
 ]
 
 [build-system]

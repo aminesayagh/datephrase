@@ -44,6 +44,7 @@ DECIDED = {
     "D56": D("2026-02-28"),                         # in one month from Jan 31, no policy: clamp is the default
     "H19": D("2026-02-28"),                         # one month ago from Mar 31, no policy: clamp is the default
     "X51": P("2026-10-26", "2026-11-02", "week"),   # this week, no week start: Monday is the default
+    "D59": D("2026-11-02"),                         # next Monday, classified future: the Monday after Mon 2026-10-26
 }
 U = lambda q, unit: {"kind": "duration", "quantity": q, "unit": unit}
 NOT_TEMPORAL, ASK = "not_temporal", "ask"
@@ -81,10 +82,7 @@ ACCEPTED = {
 # so this list is updated instead of going stale.
 NOT_READ = "dateparser does not read this text at all"
 KNOWN = {
-    **dict.fromkeys(["D25", "D43", "D44", "D45", "X17", "X53", "H16", "H20", "G01"], NOT_READ + " (quarters)"),
-    **dict.fromkeys(["D59", "X47", "H32", "G02"], NOT_READ + " (next + weekday)"),
-    **dict.fromkeys(["D26", "D27", "X04", "G04"], NOT_READ + " (number words: zero, twenty-one, twenty-sixth)"),
-    "X18": NOT_READ + " (ISO week)",
+    "G04": NOT_READ + " (a year in words: text2num turns twenty twenty-six into 20 26)",
     "D49": "dateparser swaps month 13 and day 01 into 2026-01-13 instead of rejecting it",
     "X02": "dateparser ignores a weekday that contradicts the date (26 Oct 2026 is a Monday)",
     "X12": "dateparser ignores the wrong ordinal suffix in 26rd",

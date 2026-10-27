@@ -58,7 +58,7 @@ def test_reference_date_is_used_and_recorded():
     assert d == {"backend": "dateparser 1.4.3", "reference_date": "2026-10-26", "reference_source": "session",
                  "settings": {"PREFER_LOCALE_DATE_ORDER": False, "RELATIVE_BASE": "2026-10-26T00:00:00"},
                  "classification": {"kind": None, "anchor": None, "direction": None}, "filled": [], "defaults": [],
-                 "policies": {}}
+                 "policies": {}, "text_read": None, "form": None}
 
 
 def test_output_is_json_with_metadata():
