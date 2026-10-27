@@ -1,6 +1,6 @@
 [project]
 name = "datephrase"
-version = "0.2.0"
+version = "0.2.1"
 description = "Read English date phrases into typed, JSON-ready dates, periods and durations, with provenance (a thin layer over dateparser)"
 readme = "README.md"
 license = "MIT"

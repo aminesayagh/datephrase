@@ -52,8 +52,9 @@ def read_column(values, *, context: TemporalContext | None = None) -> ColumnRead
         if real and order in ORDERS and order not in real:
             out[cell] = None  # against the column's order (31/12 read month first)
             continue
-        r = read_temporal(cell, context=replace(context, date_order=order) if order and real else context,
-                          kind="date", anchor="absolute")
+        # a cell no order changes ("12/2026") is read without one: a session order would only misread it
+        r = read_temporal(cell, context=replace(context, date_order=order if real else None), kind="date",
+                          anchor="absolute")
         out[cell] = r.date.isoformat() if r.status == "resolved" and r.date else None
         if out[cell] and r.provenance.filled:
             filled[cell] = r.provenance.filled

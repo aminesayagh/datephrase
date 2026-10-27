@@ -113,15 +113,15 @@ Without labels you get dateparser's single date as it is. With labels you get th
 
 | Reason | Meaning |
 |---|---|
-| `KIND_MISMATCH` | The `kind` label and dateparser's reading disagree: `period` but a single day was found, or `duration` for a date such as `tomorrow` |
-| `ANCHOR_MISMATCH` | `absolute`, but the text names no part of a date itself (`tomorrow`, `Wednesday`, `this month`) |
+| `KIND_MISMATCH` | The `kind` label and dateparser's reading disagree: `period` but a single day was found, or `duration` for a moment such as `tomorrow` or `tomorrow at 1:00` (a length is read back from a date, never ahead of it) |
+| `ANCHOR_MISMATCH` | `absolute`, but the phrase is counted from today: it names no part of a date itself (`tomorrow`, `Wednesday`, `this month`), or it is a form like `next quarter`, `this weekend` or `year to date` |
 | `DIRECTION_MISMATCH` | The `direction` label contradicts the text (`tomorrow` labelled `past`) |
 | `DAY_MISREAD` | dateparser returned another day than the one written (it reads `1st of the month` as the 27th) |
 | `MIXED_UNITS` | `two months and five days`: no single unit holds it exactly |
-| `FRACTION_NOT_SUPPORTED` | `1.5 months`, `in 1.5 years`: dateparser would read "1.5" as January 5 |
+| `FRACTION_NOT_SUPPORTED` | A fractional count of months, quarters or years in any spelling (`1.5 months`, `.5 yr`, `1.5-year`): dateparser would read "1.5" as January 5 |
 | `MONTH_OVERFLOW_REJECTED` | You set `month_overflow="reject"`, and Jan 31 + 1 month has no Feb 31 |
 | `OUT_OF_RANGE` | Before year 1 or after year 9999, or a week 53 that does not exist |
-| `TOO_LONG` | More than 512 characters: a phrase, not a document |
+| `TOO_LONG` | More than 512 characters, measured on the text as given: a phrase, not a document |
 | none | The text is not a date this reader understands |
 
 ## Supported phrases
@@ -168,6 +168,7 @@ The unit is kept.
 | Number and unit | `30 days`, `two weeks`, `3 months`, `one year`, `1 year 2 months` | 30 day, 2 week, 3 month, 1 year, 14 month |
 | Fractions | `2.5 days`, `1.5 weeks`, `1.5 fortnights` | exact: 2.5 day, 1.5 week, 3 week |
 | Times | `1 second`, `90 minutes`, `3 hours` | kept in that unit: 1 second, 90 minute, 3 hour |
+| Unit spellings | `90 mins`, `2 hrs`, `30 secs`, `3 wks`, `6 mos`, `2 yrs`, `1 qtr`, `1.50hours`, `2-week` | 90 minute, 2 hour, 30 second, 3 week, 6 month, 2 year, 1 quarter, 1.5 hour, 2 week |
 | In words | `twenty-one days`, `a week`, `a fortnight`, `a couple of days`, `half a year`, `one quarter` | 21 day, 1 week, 2 week, 2 day, 6 month, 1 quarter |
 
 ## Rules instead of guesses
@@ -178,6 +179,7 @@ When the text and the session leave something open, a fixed rule fills it. Every
 |---|---|---|
 | Missing year or month (`March 15`, absolute) | The **next occurrence** after today: 2027-03-15. Today itself is not "next": `October 27` gives 2027-10-27, and `October` gives October 2027. | `filled` |
 | Missing day (`February 2026` as a date) | The 1st: 2026-02-01 | `filled` |
+| A day alone (`the first`, `the 15th`) | That day at its next occurrence: 2026-11-01, 2026-11-15 (its latest one when the direction is past). dateparser alone reads `the 1st` to `the 12th` as months. | `filled` |
 | No `reference_date` in the context | Today's date from the system clock. Pass it explicitly to make results reproducible. | `reference_source: "system_clock"` |
 | No `direction` on a relative phrase | `future` (`Wednesday` gives the next one). The text wins when it says: `two weeks ago` stays in the past. | `defaults` |
 | No `week_start` | Monday (ISO 8601) | `defaults`, `policies` |
@@ -258,10 +260,10 @@ Known limits:
 
 ```bash
 uv sync
-uv run pytest -q     # 322 passed, 6 xfailed
+uv run pytest -q     # 433 passed, 6 xfailed
 ```
 
-- **`tests/test_reader.py`, `tests/test_forms.py` and `tests/test_review_gpt61.py`** cover every supported form, the rules, the questions, columns, provenance, the JSON contract, and each finding of the code reviews.
+- **`tests/test_reader.py`, `tests/test_forms.py`, `tests/test_review_gpt61.py` and `tests/test_audit_fixes.py`** cover every supported form, the rules, the questions, columns, provenance, the JSON contract, and each finding of the code reviews. Each finding is tested on the whole class of input it is about (spacings, spellings, every ordinal day, every session order), not only the reported phrase.
 - **`tests/test_spec_cases.py`** runs a reference set of 156 labelled cases (`tests/fixtures/`):
   - 150 pass.
   - The 6 known gaps above are marked `xfail(strict=True)` with their reason, so a case that starts passing fails the run until the list is updated.

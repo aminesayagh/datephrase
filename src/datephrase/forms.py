@@ -1,7 +1,8 @@
 """Forms dateparser does not read, built on dates it does: quarters, numbered weeks, a period up to today, weekends,
 and a part of a period ("the end of the month", "the first week of September").
 
-`read` returns (value, form name, parts filled by rule), or None when the text is not one of these forms. A part of a period asks the
+`read` returns (value, form name, parts filled by rule, counted from today?), or None when the text is not one of
+these forms. A form counted from today ("next quarter", "this weekend") cannot be read as absolute. A part of a period asks the
 caller back for the period itself (`read_period`), so dateparser still reads "next week" or "October"."""
 
 import re
@@ -30,22 +31,22 @@ def read(text, *, ref: date, direction: str | None, week_start, read_period):
     """`week_start()` returns the session's week start (recording its default); `read_period(text)` reads a period."""
     t = text.lower()
     if m := QUARTER.fullmatch(t):
-        return _quarter(int(m[1] or m[2]), int(m[3]) if m[3] else None, ref, direction), "quarter", _year_filled(m[3])
+        return _quarter(int(m[1] or m[2]), int(m[3]) if m[3] else None, ref, direction), "quarter", _year_filled(m[3]), False
     if m := QUARTER_YEAR_FIRST.fullmatch(t):
-        return _quarter(int(m[2]), int(m[1]), ref, direction), "quarter", ()
+        return _quarter(int(m[2]), int(m[1]), ref, direction), "quarter", (), False
     if m := QUARTER_RELATIVE.fullmatch(t):
         offset = {"last": -1, "previous": -1, "this": 0, "current": 0, "next": 1}[m[1]]
         start = _quarter_start(ref) + relativedelta(months=3 * offset)
-        return PeriodValue(start, start + relativedelta(months=3), "quarter"), "quarter", ()
+        return PeriodValue(start, start + relativedelta(months=3), "quarter"), "quarter", (), True
     if m := WEEK_NUMBER.fullmatch(t):
         week, year = (int(m[1]), m[2]) if m[1] else (int(m[4]), m[3])
-        return _iso_week(week, int(year) if year else None, ref, direction), "week_number", _year_filled(year)
+        return _iso_week(week, int(year) if year else None, ref, direction), "week_number", _year_filled(year), False
     if m := TO_DATE.fullmatch(t):
         unit = m[1] or UNITS_OF[m[2]]
         start = _start_of(unit, ref, week_start)
-        return PeriodValue(start, ref + timedelta(days=1), f"{unit}_to_date"), "to_date", ()  # today included
+        return PeriodValue(start, ref + timedelta(days=1), f"{unit}_to_date"), "to_date", (), True  # today included
     if m := WEEKEND.fullmatch(t):
-        return _weekend(m[1] or ("last" if direction == "past" else "this"), ref), "weekend", ()
+        return _weekend(m[1] or ("last" if direction == "past" else "this"), ref), "weekend", (), True
     if m := NTH_WEEK.fullmatch(t):
         p = read_period(CURRENT.get(m[2], m[2]))
         if p is None:
@@ -53,23 +54,23 @@ def read(text, *, ref: date, direction: str | None, week_start, read_period):
         start = p.end - timedelta(days=7) if m[1] == "last" else p.start + timedelta(days=7 * (int(m[1][0]) - 1))
         if start < p.start or start >= p.end:
             raise ValueError(f"{m[1]} week of a {p.grain} does not exist")
-        return PeriodValue(start, min(start + timedelta(days=7), p.end), "week"), "part_of_period", ()
+        return PeriodValue(start, min(start + timedelta(days=7), p.end), "week"), "part_of_period", (), False
     if m := DAY_OF.fullmatch(t):  # "first day of next month", "the last day of the year"
         p = read_period(CURRENT.get(m[2], m[2]))
         if p is None:
             return None
         d = p.end - timedelta(days=1) if m[1] == "last" else p.start
-        return DateValue(d, _midnight(d)), "part_of_period", ()
+        return DateValue(d, _midnight(d)), "part_of_period", (), False
     if m := PART.fullmatch(t):
         p = read_period(CURRENT.get(m[2], m[2]))
         if p is None:
             return None
         if m[1] == "end":
-            return DateValue(p.end - timedelta(days=1), _midnight(p.end - timedelta(days=1))), "part_of_period", ()
+            return DateValue(p.end - timedelta(days=1), _midnight(p.end - timedelta(days=1))), "part_of_period", (), False
         if m[1] in ("beginning", "start"):
-            return DateValue(p.start, _midnight(p.start)), "part_of_period", ()
+            return DateValue(p.start, _midnight(p.start)), "part_of_period", (), False
         middle = p.start.replace(day=15) if p.grain == "month" else p.start + timedelta(days=(p.end - p.start).days // 2)
-        return DateValue(middle, _midnight(middle)), "part_of_period", ()
+        return DateValue(middle, _midnight(middle)), "part_of_period", (), False
     return None
 
 
