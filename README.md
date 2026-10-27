@@ -1,4 +1,4 @@
-# temporal-reader
+# datephrase
 
 Read one English date phrase (`"last quarter"`, `"next Monday"`, `"26/10/2026"`, `"a fortnight"`) into a typed, JSON-ready value: a **date**, a whole **period**, or a **duration**. Each value records how it was read.
 
@@ -19,16 +19,16 @@ English only. Gregorian calendar. Python 3.13 or later.
 ## Install
 
 ```bash
-pip install "git+https://github.com/aminesayagh/temporal-reader.git"
+pip install "git+https://github.com/aminesayagh/datephrase.git"
 # or
-uv add "git+https://github.com/aminesayagh/temporal-reader.git"
+uv add "git+https://github.com/aminesayagh/datephrase.git"
 ```
 
 ## Quick start
 
 ```python
 from datetime import date
-from temporal_reader import TemporalContext, answer, read_temporal
+from datephrase import TemporalContext, answer, read_temporal
 
 ctx = TemporalContext(reference_date=date(2026, 10, 27))   # "today" for relative phrases
 
@@ -47,7 +47,7 @@ answer(r, "DMY").value.date                                                     
 From the shell:
 
 ```bash
-python -m temporal_reader "last quarter" --kind period --anchor relative --context '{"reference_date": "2026-10-27"}'
+python -m datephrase "last quarter" --kind period --anchor relative --context '{"reference_date": "2026-10-27"}'
 ```
 
 ## How it works
@@ -214,7 +214,7 @@ To stop asking for a whole session, set `TemporalContext(date_order="DMY")`.
 `read_column(values, context=None)` reads a column of cells, such as a spreadsheet's date column, with **one** day/month order for the whole column:
 
 ```python
-from temporal_reader import read_column
+from datephrase import read_column
 
 r = read_column(["01/10/2026", "26.10.2026", "05/11/2026"])
 r.order, r.order_source   # ("DMY", "evidence"): "26.10.2026" only reads day first

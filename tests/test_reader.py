@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 import pytest
 
-from temporal_reader import TemporalConfigError, TemporalContext, answer, read_temporal, reader
+from datephrase import TemporalConfigError, TemporalContext, answer, read_temporal, reader
 
 REF = TemporalContext(reference_date=date(2026, 10, 26))
 

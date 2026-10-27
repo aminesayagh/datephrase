@@ -5,7 +5,7 @@ from datetime import date
 
 import pytest
 
-from temporal_reader import TemporalContext, read_column, read_temporal
+from datephrase import TemporalContext, read_column, read_temporal
 
 NOW = TemporalContext(reference_date=date(2026, 10, 27))  # a Tuesday
 

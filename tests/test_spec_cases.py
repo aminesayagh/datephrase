@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from temporal_reader import TemporalContext, read_temporal, reader
+from datephrase import TemporalContext, read_temporal, reader
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CONTEXTS = json.loads((FIXTURES / "contexts.json").read_text())
