@@ -51,7 +51,7 @@ python -m datephrase "last quarter" --kind period --anchor relative --context '{
 
 ## How it works
 
-You give the reader **one phrase**, not a whole sentence. Cut the phrase out first (with your own extractor or an NER model). Leave comparison words such as "before", "since" or "in the last" outside it: they belong to your query, not to the date.
+You give the reader **one phrase holding one date**, not a whole sentence. This is the caller's promise: a string holding several dates (`yesterday and tomorrow`) is not checked, and what comes back for it is not defined. Cut the phrase out first (with your own extractor or an NER model). Leave comparison words such as "before", "since" or "in the last" outside it: they belong to your query, not to the date.
 
 Optionally, you also say what the phrase is. These labels usually come from a classifier upstream:
 
@@ -142,7 +142,7 @@ All examples are read with today being Tuesday, 2026-10-27.
 | Day words | `today`, `yesterday`, `tomorrow`, `the day after tomorrow` | counted from today |
 | Offsets | `in two weeks`, `3 days ago`, `3 weeks from now`, `in one quarter` | 2026-11-10, 2026-10-24, 2026-11-17, 2027-01-27 |
 | Weekdays | `Wednesday`, `next Monday`, `last Friday`, `next tue` | 2026-10-28 (future), 2026-11-02, 2026-10-23, 2026-11-03 |
-| Part of a period | `end of the month`, `the beginning of next week`, `mid-October`, `first day of next month`, `the fifth day of next month`, `the last day of next month` | 2026-10-31, 2026-11-02, 2026-10-15, 2026-11-01, 2026-11-05, 2026-11-30 |
+| Part of a period | `end of the month`, `the beginning of next week`, `mid-October`, `first day of next month`, `the fifth day of next month`, `the 15th of last month`, `the 100th day of 2027` | 2026-10-31, 2026-11-02, 2026-10-15, 2026-11-01, 2026-11-05, 2026-09-15, 2027-04-10 |
 
 ### Periods
 
@@ -160,14 +160,14 @@ All examples are read with today being Tuesday, 2026-10-27.
 
 ### Durations
 
-The unit is kept. A duration is a run of "number + unit" (`3 days`, `1 year 2 months`, `3 weeks and 2 days`, `2 hours ago`); anything else is refused as a duration.
+The unit is kept. A duration is a run of "number + unit", joined by spaces, commas, `and` or `&` (`3 days`, `1 year 2 months`, `3 days, 2 hours`, `1h30m`, `2 hours ago`); anything else is refused as a duration. Pieces in different units add up in the smallest one: `3 days & 2 hours` is 74 hours.
 
 | Written | Examples | Value |
 |---|---|---|
 | Number and unit | `30 days`, `two weeks`, `3 months`, `one year`, `1 year 2 months` | 30 day, 2 week, 3 month, 1 year, 14 month |
 | Fractions | `2.5 days`, `1.5 weeks`, `1.5 fortnights` | exact: 2.5 day, 1.5 week, 3 week |
 | Times | `1 second`, `90 minutes`, `3 hours` | kept in that unit: 1 second, 90 minute, 3 hour |
-| Unit spellings | `90 mins`, `2 hrs`, `30 secs`, `3 wks`, `6 mos`, `2 yrs`, `two qtrs`, `1.50hours`, `2-week`, `90m`, `1.5h`, `3d`, `2w`, `5y` | 90 minute, 2 hour, 30 second, 3 week, 6 month, 2 year, 2 quarter, 1.5 hour, 2 week, 90 minute, 1.5 hour, 3 day, 2 week, 5 year (one letter as dateparser reads it: `m` is minutes) |
+| Unit spellings | `90 mins`, `2 hrs`, `30 secs`, `3 wks`, `6 mos`, `2 yrs`, `two qtrs`, `1.50hours`, `2-week`, `90m`, `1.5h`, `3d`, `2w`, `5y` | 90 minute, 2 hour, 30 second, 3 week, 6 month, 2 year, 2 quarter, 1.5 hour, 2 week, 90 minute, 1.5 hour, 3 day, 2 week, 5 year (one letter only right after its number, as dateparser reads it: `m` is minutes) |
 | In words | `twenty-one days`, `a week`, `a fortnight`, `a couple of days`, `half a year`, `one quarter` | 21 day, 1 week, 2 week, 2 day, 6 month, 1 quarter |
 
 ## Rules instead of guesses
@@ -178,7 +178,7 @@ When the text and the session leave something open, a fixed rule fills it. Every
 |---|---|---|
 | Missing year or month (`March 15`, absolute) | The **next occurrence** after today: 2027-03-15. Today itself is not "next": `October 27` gives 2027-10-27, and `October` gives October 2027. | `filled` |
 | Missing day (`February 2026` as a date) | The 1st: 2026-02-01 | `filled` |
-| A day alone (`the first`, `the 15th`, `the 1st of the month`) | That day at its next occurrence: 2026-11-01, 2026-11-15 (its latest one when the direction is past), skipping months without it (`the 31st`). A phrase is a day alone when its only number is that ordinal and it names no month. dateparser alone reads `the 1st` to `the 12th` as months. | `filled` |
+| A day alone (`the first`, `the 15th`, `the 1st of the month`, `the 15th at noon`) | That day at its next occurrence: 2026-11-01, 2026-11-15 (its latest one when the direction is past), skipping months without it (`the 31st`); a time of day is kept. Only a phrase that is wholly a day counts: `the 15th of last month` is day 15 of that month, `the 2nd banana` is not a date. dateparser alone reads `the 1st` to `the 12th` as months. | `filled` |
 | No `reference_date` in the context | Today's date from the system clock. Pass it explicitly to make results reproducible. | `reference_source: "system_clock"` |
 | No `direction` on a relative phrase | `future` (`Wednesday` gives the next one). The text wins when it says: `two weeks ago` stays in the past. | `defaults` |
 | No `week_start` | Monday (ISO 8601) | `defaults`, `policies` |
@@ -240,7 +240,7 @@ Known limits:
 
 ```bash
 uv sync
-uv run pytest -q     # 1258 passed, 6 xfailed
+uv run pytest -q     # 1300 passed, 6 xfailed
 ```
 
 - **`tests/test_reader.py`, `tests/test_forms.py`, `tests/test_review_gpt61.py` and `tests/test_audit_fixes.py`** cover every supported form, the rules, the questions, provenance, the JSON contract, and each finding of the code reviews. Each finding is tested on the whole class of input it is about (spacings, spellings, every ordinal day on several reference dates), not only the reported phrase.

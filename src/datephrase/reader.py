@@ -96,7 +96,8 @@ ORDINAL_DAY = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)\b(?!\s*{UNIT_WORD}(?!\s
 DURATION_SHAPE = re.compile(
     r"(?:for )?(?:\d*\.?\d+ (?:second|minute|hour|day|week|month|year)s?(?:,? and |, ?| )?)+(?: ago)?", re.IGNORECASE)
 # a whole phrase that is one day of the month: "the 15th", "15th of the month", "the 1st at noon"
-LONE_DAY = re.compile(r"(?:the )?(\d{1,2})(?:st|nd|rd|th)(?: of (?:the|this) month)?(?:,? at (.+))?", re.IGNORECASE)
+# ("the 15th of this month" names its month: a day of that period, read by the forms)
+LONE_DAY = re.compile(r"(?:the )?(\d{1,2})(?:st|nd|rd|th)(?: of the month)?(?:,? at (.+))?", re.IGNORECASE)
 _QUARTERS = re.compile(r"\bquarters?\b(?![\s-]+of\b)", re.IGNORECASE)
 
 

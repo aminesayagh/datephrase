@@ -210,3 +210,83 @@ def test_unit_spellings(text, expected):
 def test_a_quarter_of_an_hour_is_never_a_calendar_quarter(text):
     r = read_temporal(text, kind="duration")
     assert r.value is None or r.value.unit not in ("month", "quarter")
+
+
+# ---------- final audit (2026-10-27): items 1-8, each on its whole class ----------
+
+
+@pytest.mark.parametrize("n", [1, 2, 9, 12, 13, 15, 28])
+@pytest.mark.parametrize("period, start", [("last month", date(2026, 9, 1)), ("next month", date(2026, 11, 1)),
+                                           ("next year", date(2027, 1, 1)), ("this month", date(2026, 10, 1))])
+def test_nth_of_a_period_is_that_day_of_it(n, period, start):  # 1: the qualifier was dropped
+    r = read_temporal(f"the {ordinal(n)} of {period}", context=NOW, kind="date", anchor="relative")
+    assert r.value.date == start.replace(day=n)
+
+
+@pytest.mark.parametrize("text", ["the 2nd banana", "the 15th apple", "the 3rd attempt", "1st place"])
+def test_an_ordinal_with_other_words_is_not_a_lone_day(text):  # 1: any text with one ordinal became a date
+    assert read_temporal(text, context=NOW, kind="date", anchor="relative").status == "not_temporal"
+
+
+@pytest.mark.parametrize("tens", [20, 30, 40, 50])
+@pytest.mark.parametrize("direction, sign", [("past", -1), ("future", 1)])
+def test_a_round_count_of_seconds_is_a_count(tens, direction, sign):  # 2: "20 second ago" became the 22nd
+    from datetime import datetime, timedelta
+    phrase = f"{tens} second ago" if direction == "past" else f"in {tens} second"
+    r = read_temporal(phrase, context=NOW, kind="date", anchor="relative", direction=direction)
+    assert r.value.datetime == datetime(2026, 10, 27) + sign * timedelta(seconds=tens)
+
+
+@pytest.mark.parametrize("text", ["the second day of next year", "the 15th of last month", "the first week of next month",
+                                  "the end of next week", "mid next month"])
+def test_a_recognised_form_whose_period_is_refused_is_refused(text):  # 3: fell through to the lone-day rule
+    r = read_temporal(text, context=NOW, kind="date" if "week of" not in text else "period", anchor="absolute")
+    assert (r.status, r.reason) == ("not_temporal", "ANCHOR_MISMATCH")
+
+
+@pytest.mark.parametrize("clock, hour", [("noon", 12), ("5pm", 17), ("9:30", 9), ("midnight", 0)])
+def test_a_lone_day_keeps_its_time(clock, hour):  # 4: "the 15th at noon" lost its time
+    r = read_temporal(f"the 15th at {clock}", context=NOW, kind="date", anchor="absolute")
+    assert (r.value.date, r.value.datetime.hour) == (date(2026, 11, 15), hour)
+
+
+@pytest.mark.parametrize("text", ["3 days, 2 hours", "3 days,2 hours", "3 days & 2 hours", "3 days and 2 hours",
+                                  "3 days 2 hours", "3 days, 2 hours."])
+def test_duration_pieces_with_any_separator(text):  # 5: valid durations were refused
+    assert show(read_temporal(text, kind="duration")) == "74 hour"
+
+
+@pytest.mark.parametrize("text, expected", [("1h30m", "90 minute"), ("2h15m", "135 minute"), ("1d12h", "36 hour"),
+                                            ("3 days.", "3 day")])
+def test_glued_unit_pairs(text, expected):  # 6: "1h30m" was refused
+    assert show(read_temporal(text, kind="duration")) == expected
+
+
+@pytest.mark.parametrize("text", ["01 02 2026", "01/02/2026", "1,2,2026"])
+@pytest.mark.parametrize("labels, reason", [({"kind": "period", "anchor": "absolute"}, "KIND_MISMATCH"),
+                                            ({"kind": "duration"}, None)])
+def test_no_question_when_no_answer_would_be_used(text, labels, reason):  # 7: asked although both answers fail
+    r = read_temporal(text, context=NOW, **labels)
+    assert r.status == "not_temporal" and (reason is None or r.reason == reason)
+
+
+def test_one_usable_answer_decides_without_asking():  # 7: past label, only one reading lies in the past
+    r = read_temporal("01/02/2027", context=NOW, kind="date", anchor="relative", direction="past")
+    assert r.status != "ask"
+
+
+@pytest.mark.parametrize("n, expected", [(100, date(2027, 4, 10)), (32, date(2027, 2, 1)), (365, date(2027, 12, 31))])
+def test_any_nth_day_of_a_year(n, expected):  # 8: only two-digit days were read
+    r = read_temporal(f"the {ordinal(n)} day of 2027", context=NOW, kind="date", anchor="relative")
+    assert r.value.date == expected
+
+
+def test_a_day_beyond_its_period_is_out_of_range():
+    r = read_temporal("the 366th day of 2027", context=NOW, kind="date", anchor="relative")
+    assert (r.status, r.reason) == ("not_temporal", "OUT_OF_RANGE")
+
+
+@pytest.mark.parametrize("text", ["10:10 26 Oct 2026", "26 Oct 2026 10:10", "10:10 2026-10-26"])
+def test_a_time_is_never_a_day_month_pair(text):  # the colon rule
+    r = read_temporal(text, context=NOW, kind="date", anchor="absolute")
+    assert (r.status, r.value.date) == ("resolved", date(2026, 10, 26))
