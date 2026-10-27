@@ -7,12 +7,11 @@ It is a thin layer over two maintained libraries:
 - [dateparser](https://github.com/scrapinghub/dateparser) 1.4.3 (BSD-3-Clause) reads the text.
 - [text2num](https://github.com/allo-media/text2num) 3.1.0 (MIT) turns number words into digits.
 
-On top of them it adds four things:
+On top of them it adds three things:
 
 - **The shape you asked for.** A period is the whole period (`last month` gives September 1 to October 1), not one day inside it. A duration keeps its unit: `3 months` stays 3 months, never 90 days.
 - **Forms dateparser does not read.** Quarters, ISO week numbers, "year to date", weekends, and parts of a period ("the end of the month", "the first week of September").
 - **No silent guesses.** Every gap is filled by a named rule and recorded. The one real ambiguity, the day/month order of `01/02/2026`, comes back as a question for your user.
-- **Whole columns.** `read_column` reads a spreadsheet column of dates with a single day/month order for the whole column, decided by evidence.
 
 English only. Gregorian calendar. Python 3.13 or later.
 
@@ -215,25 +214,6 @@ answer(payload, "DMY").value.date   # 2026-02-01
 
 To stop asking for a whole session, set `TemporalContext(date_order="DMY")`.
 
-## Reading a column
-
-`read_column(values, context=None)` reads a column of cells, such as a spreadsheet's date column, with **one** day/month order for the whole column:
-
-```python
-from datephrase import read_column
-
-r = read_column(["01/10/2026", "26.10.2026", "05/11/2026"])
-r.order, r.order_source   # ("DMY", "evidence"): "26.10.2026" only reads day first
-r.cells                   # {"01/10/2026": "2026-10-01", "26.10.2026": "2026-10-26", "05/11/2026": "2026-11-05"}
-```
-
-- **The order** comes from `context.date_order`, or else from evidence: one cell that only one order reads (a day over 12) settles the whole column.
-- **No evidence:** with no deciding cell and at least one ambiguous cell, you get **one** question for the column (`DATE_ORDER_AMBIGUOUS`), never one per cell. Answer it by calling `read_column` again with `TemporalContext(date_order=<chosen value>)`.
-- **Contradicting cells** (`26/10/2026` beside `10/26/2026`) give one `ORDER_CONFLICT` question.
-- **Order-free cells** (`2026-10-26`, `26 Oct 2026`, `12/2026`) are always read.
-- **`None` cells:** a cell against the chosen order, or one that is not a date.
-- **Keys and missing parts:** cells are keyed by their stripped text, and each distinct cell is read once. A cell missing its year gets the next occurrence, listed in `r.filled`.
-
 ## Not supported
 
 Read as `not_temporal` by design:
@@ -263,7 +243,7 @@ uv sync
 uv run pytest -q     # 1258 passed, 6 xfailed
 ```
 
-- **`tests/test_reader.py`, `tests/test_forms.py`, `tests/test_review_gpt61.py` and `tests/test_audit_fixes.py`** cover every supported form, the rules, the questions, columns, provenance, the JSON contract, and each finding of the code reviews. Each finding is tested on the whole class of input it is about (spacings, spellings, every ordinal day, every session order), not only the reported phrase.
+- **`tests/test_reader.py`, `tests/test_forms.py`, `tests/test_review_gpt61.py` and `tests/test_audit_fixes.py`** cover every supported form, the rules, the questions, provenance, the JSON contract, and each finding of the code reviews. Each finding is tested on the whole class of input it is about (spacings, spellings, every ordinal day on several reference dates), not only the reported phrase.
 - **`tests/test_spec_cases.py`** runs a reference set of 156 labelled cases (`tests/fixtures/`):
   - 150 pass.
   - The 6 known gaps above are marked `xfail(strict=True)` with their reason, so a case that starts passing fails the run until the list is updated.

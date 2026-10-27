@@ -222,32 +222,3 @@ def _details(v: Value | None) -> dict | None:
     if isinstance(v, PeriodValue):
         return {"days": (v.end - v.start).days}
     return None
-
-
-@dataclass(frozen=True)
-class ColumnRead:
-    """One day/month order for a whole column of cells, and each distinct cell read with it.
-
-    order: MDY or DMY, or None when no cell depends on it or the question is still open.
-    order_source: "session" (context.date_order), "evidence" (a cell only one order reads, e.g. 26/10/2026), or None.
-    question: set when no cell decides (or cells disagree); answer it by reading the column again with
-    TemporalContext(date_order=<the chosen option's value>).
-    cells: each distinct cell -> ISO date, or None (not a date, against the order, or waiting on the question).
-    filled: cells whose missing parts were filled by rule (a missing year: the next occurrence)."""
-
-    order: str | None
-    order_source: str | None
-    question: Question | None
-    cells: dict
-    filled: dict
-    evidence: dict
-
-    def to_dict(self) -> dict:
-        return {
-            "order": self.order,
-            "order_source": self.order_source,
-            "question": self.question.to_dict() if self.question else None,
-            "cells": self.cells,
-            "filled": {cell: list(parts) for cell, parts in self.filled.items()},
-            "evidence": self.evidence,
-        }

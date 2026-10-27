@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from datephrase import TemporalContext, read_column, read_temporal
+from datephrase import TemporalContext, read_temporal
 
 NOW = TemporalContext(reference_date=date(2026, 10, 27))
 
@@ -41,10 +41,6 @@ def test_a_relative_phrase_labelled_absolute_is_refused(text, kind):  # 4: "tomo
     assert (r.status, r.reason) == ("not_temporal", "ANCHOR_MISMATCH")
 
 
-def test_a_column_never_reads_a_relative_word():  # 4, through read_column
-    assert read_column(["tomorrow"], context=NOW).cells == {"tomorrow": None}
-
-
 def test_a_decimal_length_is_not_a_day_month_pair():  # 5: "1.5 years" asked the day/month order
     r = read_temporal("1.5 years", context=NOW, kind="date", anchor="relative")
     assert r.status == "not_temporal"
@@ -63,16 +59,6 @@ def test_time_units_are_kept(text, expected):  # 7: "1 second" was 1.157e-05 day
     assert show(read_temporal(text, kind="duration")) == expected
 
 
-def test_a_ymd_session_order_reads_the_column():  # 8: was None
-    r = read_column(["26/10/05"], context=TemporalContext(reference_date=date(2026, 10, 27), date_order="YMD"))
-    assert r.cells == {"26/10/05": "2026-10-05"}
-
-
-def test_a_cell_both_orders_read_alike_does_not_wait():  # 9: "02/02/2026" was None while a question was open
-    r = read_column(["01/02/2026", "02/02/2026"], context=NOW)
-    assert (r.question.reason, r.cells) == ("DATE_ORDER_AMBIGUOUS", {"01/02/2026": None, "02/02/2026": "2026-02-02"})
-
-
 @pytest.mark.parametrize("text, expected", [
     ("October twenty-second 2026", "2026-10-22"), ("the twenty second of October 2026", "2026-10-22"),
 ])
@@ -83,9 +69,3 @@ def test_compound_ordinals_ending_in_second(text, expected):  # 10: was not_temp
 def test_a_part_of_a_period_reports_the_year_filled_inside():  # 12: filled was ()
     r = read_temporal("beginning of October", context=NOW, kind="date", anchor="absolute")
     assert (show(r), r.provenance.filled) == ("2027-10-01", ("year",))
-
-
-def test_column_question_labels_use_the_reference_date():  # 13: labels showed 2026 for a 2040 reference
-    r = read_column(["01/02"], context=TemporalContext(reference_date=date(2040, 10, 27)))
-    labels = [label for _, label in r.question.options]
-    assert all("2041" in label for label in labels), labels

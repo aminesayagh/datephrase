@@ -1,11 +1,11 @@
-"""The CLI integration's cases (2026-10-27): forms built on dateparser, rewrites, and reading a column of cells.
+"""The CLI integration's cases (2026-10-27): forms built on dateparser, and rewrites.
 Labels are the ones the CLI's classifier sends; expected values are written by hand for reference 2026-10-27."""
 
 from datetime import date
 
 import pytest
 
-from datephrase import TemporalContext, read_column, read_temporal
+from datephrase import TemporalContext, read_temporal
 
 NOW = TemporalContext(reference_date=date(2026, 10, 27))  # a Tuesday
 
@@ -112,64 +112,6 @@ def test_number_words_are_rewritten_only_for_classified_text():
     assert read_temporal("the second", context=NOW).status == "not_temporal"
 
 
-# ---------- a column of cells ----------
-
-
-def test_one_cell_with_a_day_over_12_settles_the_column():
-    r = read_column(["01/10/2026", "26.10.2026", "05/11/2026"], context=NOW)
-    assert (r.order, r.order_source, r.question) == ("DMY", "evidence", None)
-    assert r.cells == {"01/10/2026": "2026-10-01", "26.10.2026": "2026-10-26", "05/11/2026": "2026-11-05"}
-    assert r.evidence == {"MDY": [], "DMY": ["26.10.2026"]}
-
-
-def test_month_first_evidence():
-    r = read_column(["10/26/2026", "01/02/2026"], context=NOW)
-    assert (r.order, r.cells) == ("MDY", {"10/26/2026": "2026-10-26", "01/02/2026": "2026-01-02"})
-
-
-def test_no_evidence_one_question_for_the_column():
-    r = read_column(["01/10/2026", "05/11/2026", "2026-10-26"], context=NOW)
-    assert (r.order, r.question.reason, r.question.field) == (None, "DATE_ORDER_AMBIGUOUS", "date_order")
-    assert [o[0] for o in r.question.options] == ["MDY", "DMY"]
-    # cells that depend on the order wait; the others are read
-    assert r.cells == {"01/10/2026": None, "05/11/2026": None, "2026-10-26": "2026-10-26"}
-
-
-def test_the_answer_is_the_session_order():
-    r = read_column(["01/10/2026", "05/11/2026"], context=TemporalContext(date(2026, 10, 27), date_order="DMY"))
-    assert (r.order, r.order_source, r.question) == ("DMY", "session", None)
-    assert r.cells == {"01/10/2026": "2026-10-01", "05/11/2026": "2026-11-05"}
-
-
-def test_contradicting_cells_ask_once_and_wait():
-    r = read_column(["26/10/2026", "10/26/2026", "01/02/2026"], context=NOW)
-    assert (r.order, r.question.reason) == (None, "ORDER_CONFLICT")
-    assert set(r.cells.values()) == {None}
-
-
-def test_a_cell_against_the_chosen_order_is_not_read():
-    r = read_column(["26/10/2026", "10/26/2026"], context=TemporalContext(date(2026, 10, 27), date_order="DMY"))
-    assert r.cells == {"26/10/2026": "2026-10-26", "10/26/2026": None}
-
-
-def test_cells_that_need_no_order_and_non_dates():
-    r = read_column(["2026-10-26", "26 Oct 2026", "", "  ", "n/a", "02/02/2026"], context=NOW)
-    assert (r.order, r.question) == (None, None)
-    assert r.cells == {"2026-10-26": "2026-10-26", "26 Oct 2026": "2026-10-26", "n/a": None, "02/02/2026": "2026-02-02"}
-
-
-def test_distinct_cells_only_and_filled_parts_reported():
-    r = read_column(["26/10", "26/10", "01/02/2026"], context=NOW)
-    assert (r.order, list(r.cells)) == ("DMY", ["26/10", "01/02/2026"])
-    assert (r.cells["26/10"], r.filled) == ("2027-10-26", {"26/10": ("year",)})  # the next occurrence
-
-
-def test_column_json():
-    d = read_column(["01/10/2026"], context=NOW).to_dict()
-    assert set(d) == {"order", "order_source", "question", "cells", "filled", "evidence"}
-    assert d["question"]["options"][1]["value"] == "DMY"
-
-
 # ---------- review findings (2026-10-27): each test failed before its fix ----------
 
 
@@ -201,11 +143,6 @@ def test_an_ordinal_day_dateparser_misreads_is_never_a_wrong_date(text, directio
 def test_first_and_last_day_of_a_period(text, expected):
     r = read_temporal(text, context=NOW, kind="date", anchor="relative", direction="future")
     assert show(r) == expected
-
-
-@pytest.mark.parametrize("column", [["12/2026", "26/10/2026"], ["12/2026", "01/02/2026"]])
-def test_a_cell_the_order_cannot_change_is_read_either_way(column):
-    assert read_column(column, context=NOW).cells["12/2026"] == "2026-12-01"
 
 
 def test_a_part_of_a_period_reports_the_week_start_it_used():

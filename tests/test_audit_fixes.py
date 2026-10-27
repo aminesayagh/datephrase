@@ -5,7 +5,7 @@ from datetime import date
 
 import pytest
 
-from datephrase import TemporalContext, read_column, read_temporal
+from datephrase import TemporalContext, read_temporal
 
 NOW = TemporalContext(reference_date=date(2026, 10, 27))
 
@@ -80,22 +80,9 @@ def test_fractional_days_and_weeks_still_read():
         "1.5 day", "0.5 day", "1.5 week"]
 
 
-# A cell no order changes is read without the session's order, whatever that order is.
-@pytest.mark.parametrize("cell", ["01 02 2026", "1,2,2026", "01/02/2026", "01.02.2026", "01-02-2026", "1 2 2026"])
-@pytest.mark.parametrize("order, expected", [("DMY", "2026-02-01"), ("MDY", "2026-01-02")])
-def test_the_session_order_applies_whatever_the_separator(cell, order, expected):
-    assert read_column([cell], context=TemporalContext(date(2026, 10, 27), order)).cells == {cell: expected}
-
-
 @pytest.mark.parametrize("text", ["01 02 2026", "1,2,2026", "01.02.2026", "1 2 2026"])
 def test_a_real_order_ambiguity_is_asked_whatever_the_separator(text):
     assert read_temporal(text, context=NOW).question.reason == "DATE_ORDER_AMBIGUOUS"
-
-
-@pytest.mark.parametrize("order", ["DMY", "MDY", "YMD", None])
-def test_order_free_cells_ignore_the_session_order(order):
-    r = read_column(["12/2026", "2026-10-26", "Oct 2026"], context=TemporalContext(date(2026, 10, 27), order))
-    assert r.cells == {"12/2026": "2026-12-01", "2026-10-26": "2026-10-26", "Oct 2026": "2026-10-01"}
 
 
 # Every form counted from today is refused under an absolute label; forms that name their period are not.
