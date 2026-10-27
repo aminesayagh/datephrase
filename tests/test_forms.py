@@ -168,3 +168,67 @@ def test_column_json():
     d = read_column(["01/10/2026"], context=NOW).to_dict()
     assert set(d) == {"order", "order_source", "question", "cells", "filled", "evidence"}
     assert d["question"]["options"][1]["value"] == "DMY"
+
+
+# ---------- review findings (2026-10-27): each test failed before its fix ----------
+
+
+@pytest.mark.parametrize("text, kind, anchor, direction, expected", [
+    ("in a second", "date", "relative", "future", "2026-10-27"),     # "second" the unit, not the ordinal 2nd
+    ("a second ago", "date", "relative", "past", "2026-10-26"),      # one second before midnight of the 27th
+    ("a second", "duration", None, None, "resolved"),
+    ("1 second", "duration", None, None, "resolved"),
+    ("the second of March", "date", "relative", "past", "2026-03-02"),  # the ordinal still reads
+    ("the second week of September", "period", "relative", "past", "2026-09-08..2026-09-15"),
+])
+def test_second_as_a_unit_survives_number_words(text, kind, anchor, direction, expected):
+    r = read_temporal(text, context=NOW, kind=kind, anchor=anchor, direction=direction)
+    assert (r.status if expected == "resolved" else show(r)) == expected, (r.status, r.reason)
+
+
+@pytest.mark.parametrize("text, direction", [
+    ("first of the month", "future"), ("the first", "past"), ("1st of the month", "future"),
+])
+def test_an_ordinal_day_dateparser_misreads_is_never_a_wrong_date(text, direction):
+    # dateparser reads "1st of the month" as the 27th; a day that is not the written one is refused
+    r = read_temporal(text, context=NOW, kind="date", anchor="relative", direction=direction)
+    assert r.status != "resolved" or r.date.day == 1, show(r)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("first day of next month", "2026-11-01"), ("the last day of next month", "2026-11-30"),
+])
+def test_first_and_last_day_of_a_period(text, expected):
+    r = read_temporal(text, context=NOW, kind="date", anchor="relative", direction="future")
+    assert show(r) == expected
+
+
+@pytest.mark.parametrize("column", [["12/2026", "26/10/2026"], ["12/2026", "01/02/2026"]])
+def test_a_cell_the_order_cannot_change_is_read_either_way(column):
+    assert read_column(column, context=NOW).cells["12/2026"] == "2026-12-01"
+
+
+def test_a_part_of_a_period_reports_the_week_start_it_used():
+    r = read_temporal("the beginning of next week", context=NOW, kind="date", anchor="relative", direction="future")
+    assert (r.provenance.policies, "week_start:monday" in r.provenance.defaults) == ({"week_start": "monday"}, True)
+
+
+@pytest.mark.parametrize("text, expected", [("Q4", "2027-10-01..2028-01-01"), ("week 43", "2027-10-25..2027-11-01")])
+def test_a_year_filled_for_quarters_and_weeks_is_recorded(text, expected):
+    r = read_temporal(text, context=NOW, kind="period", anchor="absolute")
+    assert (show(r), r.provenance.filled) == (expected, ("year",))
+
+
+def test_this_weekday_follows_the_label():
+    r = read_temporal("this Monday", context=NOW, kind="date", anchor="relative", direction="past")
+    assert show(r) == "2026-10-26"
+
+
+def test_week_53_in_the_past_is_the_latest_year_that_has_one():
+    r = read_temporal("week 53", context=NOW, kind="period", anchor="relative", direction="past")
+    assert show(r) == "2020-12-28..2021-01-04"
+
+
+def test_a_quarter_of_an_hour_is_not_three_months():
+    r = read_temporal("one quarter of an hour", context=NOW, kind="duration")
+    assert r.provenance.text_read is None or "month" not in r.provenance.text_read

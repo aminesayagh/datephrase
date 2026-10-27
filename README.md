@@ -107,6 +107,14 @@ dateparser reads none of the following. They are built on top of it.
 - `Christmas`: no holiday calendars.
 - `next weekend`: it could be this weekend or the one after.
 
+**Known limits (from review, 2026-10-27):**
+
+- **A direction label is checked only against dates, not periods.** `last quarter` labelled `future` still resolves to the past quarter.
+- **A part of a period takes the whole period's next occurrence.**
+  - `end of October` (relative, future) on 2026-10-27 gives 2027-10-31, although 2026-10-31 is still ahead.
+  - `the end of the month` labelled `absolute` gives March 2027; label it `relative`.
+- **dateparser misreads ordinals followed by "of the month".** When the day it returns isn't the written one (`1st of the month` read as the 27th), the result is `not_temporal` / `DAY_MISREAD`, never a wrong date.
+
 ## Reading a column of cells
 
 `read_column(values, context=None)` reads an uploaded file's date column with **one** day/month order:
@@ -121,6 +129,8 @@ r.cells                     # {"01/10/2026": "2026-10-01", "26.10.2026": "2026-1
 - With no evidence and a cell that both orders read differently, there is **one question for the column**, never one per cell. To answer it, read the column again with `TemporalContext(date_order=<the chosen value>)`.
 - Cells that contradict each other (`26/10/2026` beside `10/26/2026`) get one `ORDER_CONFLICT` question.
 - Cells that don't depend on the order (`2026-10-26`, `26 Oct 2026`) are always read. A cell against the order, or not a date, is `None`.
+- A cell no order reads as a day and a month (`12/2026`) doesn't depend on the order, so it is read either way.
+- Cells are keyed by their stripped text. Non-string cells (`None`, date objects) are skipped.
 - Each distinct cell is read once. A cell missing its year gets the next occurrence, listed in `filled`.
 
 ## Classification from the caller
@@ -173,5 +183,5 @@ The failures are marked `strict`: a case that starts passing fails the run, so t
 
 ```bash
 uv sync
-uv run pytest -q     # 282 passed, 6 xfailed
+uv run pytest -q     # 301 passed, 6 xfailed
 ```

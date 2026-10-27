@@ -24,11 +24,10 @@ def read_column(values, *, context: TemporalContext | None = None) -> ColumnRead
     cells = list(dict.fromkeys(v.strip() for v in values if isinstance(v, str) and v.strip()))
     # ponytail: every distinct cell costs a few dateparser calls (~ms each); cache by cell if columns get large
 
+    # the orders that read each cell as a day and a month of its own numbers ("12/2026" has none: order-free)
+    reads = {cell: [o for o in ORDERS if _reads_as(cell, o)] for cell in cells if _order_matters(cell)}
     evidence, both = {o: [] for o in ORDERS}, []
-    for cell in cells:
-        if not _order_matters(cell):
-            continue
-        real = [o for o in ORDERS if _reads_as(cell, o)]
+    for cell, real in reads.items():
         if len(real) == 1:
             evidence[real[0]].append(cell)
         elif len(real) == 2 and len({_parse(cell, _settings(o)).date_obj.date() for o in real}) == 2:
@@ -46,17 +45,11 @@ def read_column(values, *, context: TemporalContext | None = None) -> ColumnRead
 
     out, filled = {}, {}
     for cell in cells:
-        depends = _order_matters(cell)
-        if depends and (order is None or not _reads_as(cell, order)):
-            # waiting on the question, or a cell the column's order cannot read (31/12 under MDY): not read.
-            # A cell no order reads with both its day and month is not a date either way.
-            if order is None and not (question or cell in both):
-                r = read_temporal(cell, context=context, kind="date", anchor="absolute")
-                out[cell] = r.date.isoformat() if r.date else None
-                continue
-            out[cell] = None
+        real = reads.get(cell)
+        if real and (question or (order and order not in real)):
+            out[cell] = None  # waiting on the question, or against the column's order (31/12 read month first)
             continue
-        r = read_temporal(cell, context=replace(context, date_order=order) if order else context,
+        r = read_temporal(cell, context=replace(context, date_order=order) if order and real else context,
                           kind="date", anchor="absolute")
         out[cell] = r.date.isoformat() if r.status == "resolved" and r.date else None
         if out[cell] and r.provenance.filled:

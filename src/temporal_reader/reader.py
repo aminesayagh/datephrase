@@ -3,7 +3,7 @@ decides what shape the answer takes. Gaps are filled by named rules and recorded
 either way (the day/month order of 01/02/2026) is asked."""
 
 import re
-from calendar import monthrange
+from calendar import month_abbr, month_name, monthrange
 from dataclasses import fields
 from datetime import date, datetime, time, timedelta
 from fractions import Fraction
@@ -51,15 +51,20 @@ SEARCH_LIMIT = 12 * 8  # months scanned for a next occurrence: covers February 2
 WEEKDAY = r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues|tue|wed|thurs|thur|thu|fri|sat|sun"
 # "next Monday" is not read by dateparser; "Monday" is, and "next" / "last" say which one
 RELATIVE_WEEKDAY = re.compile(rf"(next|coming|this|last|previous) ((?:{WEEKDAY})\.?)", re.IGNORECASE)
-WEEKDAY_DIRECTION = {"next": "future", "coming": "future", "this": "future", "last": "past", "previous": "past"}
+WEEKDAY_DIRECTION = {"next": "future", "coming": "future", "this": None, "last": "past", "previous": "past"}
 # Lengths dateparser does not read, said in the units it does. A quarter is 3 months (converted back, see _QUARTERS).
 LENGTH_WORDS = (
     (re.compile(r"\b(\d+) fortnights?\b", re.IGNORECASE), lambda m: f"{2 * int(m[1])} weeks"),
     (re.compile(r"\ba fortnight\b", re.IGNORECASE), lambda m: "2 weeks"),
     (re.compile(r"\b(?:a )?couple(?: of)?\b", re.IGNORECASE), lambda m: "2"),
     (re.compile(r"\bhalf (?:a |an )?year\b", re.IGNORECASE), lambda m: "6 months"),
-    (re.compile(r"\b(\d+) quarters?\b", re.IGNORECASE), lambda m: f"{3 * int(m[1])} months"),
+    (re.compile(r"\b(\d+) quarters?\b(?! of)", re.IGNORECASE), lambda m: f"{3 * int(m[1])} months"),  # not "of an hour"
 )
+# "second" is a unit of time as well as an ordinal: text2num would turn "in a second" into "in a 2nd"
+SECOND = re.compile(r"\bseconds?\b", re.IGNORECASE)
+MONTH_NAMES = {m.lower() for m in month_name[1:] + month_abbr[1:]}
+# One written day ("the 1st", "October 26th"): dateparser misreads some ("1st of the month" -> the 27th)
+ORDINAL_DAY = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)\b", re.IGNORECASE)
 _QUARTERS = LENGTH_WORDS[-1][0]
 
 
@@ -107,7 +112,7 @@ def read_temporal(
     phrase, text_direction = _rewrite(stripped) if kind else (stripped, None)
     quarters = kind == "duration" and bool(_QUARTERS.search(alpha2digit(stripped, "en", threshold=0)))
     labelled, defaults, policies = direction, [], {}
-    if text_direction:  # "last Friday": the text says which one
+    if text_direction:  # "last Friday": the text says which one ("this Friday" does not: the label decides)
         direction = text_direction
     elif anchor == "relative" and direction is None:  # decided 2026-10-27: a relative date without a label is future
         direction = "future"
@@ -151,14 +156,19 @@ def read_temporal(
     if kind != "duration":
         def read_period(t):
             r = read_temporal(t, context=ctx, kind="period", anchor=anchor, direction=labelled)
-            return r.value if r.status == "resolved" else None
+            if r.status != "resolved":
+                return None
+            policies.update(r.provenance.policies)  # what the period used is what this answer used
+            defaults.extend(d for d in r.provenance.defaults if d not in defaults)
+            return r.value
         try:
             found = forms.read(phrase, ref=ref, direction=direction, week_start=lambda: setting("week_start"),
                                read_period=read_period)
         except (ValueError, OverflowError):  # week 53 of a 52-week year, beyond year 9999
             return done("not_temporal", reason="OUT_OF_RANGE")
         if found:
-            value, form = found
+            value, form, form_filled = found
+            filled += form_filled
             uses_ref = True
             if kind and value.kind != kind:
                 return done("not_temporal", reason="KIND_MISMATCH")
@@ -211,6 +221,9 @@ def read_temporal(
                 value = DurationValue(int(q) if q.denominator == 1 else float(q), "quarter")
         else:
             value = DateValue(d, moment)
+            days = ORDINAL_DAY.findall(phrase)
+            if len(days) == 1 and int(days[0]) != d.day:  # not the day the text wrote: never a wrong date
+                return done("not_temporal", reason="DAY_MISREAD", data=data)
     except (ValueError, OverflowError):  # beyond year 1..9999
         return done("not_temporal", reason="OUT_OF_RANGE", data=data)
     if value is None:  # the classification and dateparser's precision disagree: never forced
@@ -237,7 +250,16 @@ def answer(asked: TemporalReadResult | dict, value) -> TemporalReadResult:
 def _rewrite(text: str) -> tuple[str, str | None]:
     """The text in words dateparser reads, and the direction it states, if any. Numbers in words become digits
     (text2num: "October twenty-sixth" -> "October 26th")."""
-    text = alpha2digit(text, "en", threshold=0)
+    units = []
+    def keep_unit(m):  # "second" stays a word unless it is the ordinal of a day, week, quarter or month
+        before, after = text[:m.start()].lower().split(), text[m.end():].lower()
+        if after.startswith((" of", " week", " quarter", " half")) or (before and before[-1] in MONTH_NAMES | {"the"}):
+            return m[0]
+        units.append(m[0])
+        return f"SECONDUNIT{len(units) - 1}"
+    text = alpha2digit(SECOND.sub(keep_unit, text), "en", threshold=0)
+    for i, unit in enumerate(units):
+        text = text.replace(f"SECONDUNIT{i}", unit)
     for pattern, said in LENGTH_WORDS:
         text = pattern.sub(said, text)
     if m := RELATIVE_WEEKDAY.fullmatch(text):
