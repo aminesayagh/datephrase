@@ -18,7 +18,7 @@ QUARTER_RELATIVE = re.compile(r"(last|previous|this|current|next) quarter")
 WEEK_NUMBER = re.compile(r"(?:the )?(?:week|wk\.?) ?(\d{1,2})(?:,? (?:of )?(\d{4}))?|(\d{4})-?w(\d{1,2})")
 TO_DATE = re.compile(r"(year|quarter|month|week)[ -]to[ -]date|([yqmw])td")
 WEEKEND = re.compile(r"(?:(last|previous|this) )?weekend|the weekend")
-DAY_OF = re.compile(r"(?:the )?(1st|first|last) day of (.+)")
+DAY_OF = re.compile(r"(?:the )?(\d{1,2}(?:st|nd|rd|th)|first|last) day of (.+)")
 PART = re.compile(r"(?:the )?(end|beginning|start|middle|mid)(?:-| of | )(.+)")
 NTH_WEEK = re.compile(r"(?:the )?(1st|2nd|3rd|4th|5th|last) week of (.+)")
 # "the end of the month": the month meant is the current one
@@ -59,7 +59,10 @@ def read(text, *, ref: date, direction: str | None, week_start, read_period):
         p = read_period(CURRENT.get(m[2], m[2]))
         if p is None:
             return None
-        d = p.end - timedelta(days=1) if m[1] == "last" else p.start
+        nth = 1 if m[1] == "first" else None if m[1] == "last" else int(m[1][:-2])
+        d = p.end - timedelta(days=1) if nth is None else p.start + timedelta(days=nth - 1)
+        if not p.start <= d < p.end:
+            raise ValueError(f"day {nth} of a {p.grain} does not exist")
         return DateValue(d, _midnight(d)), "part_of_period", (), False
     if m := PART.fullmatch(t):
         p = read_period(CURRENT.get(m[2], m[2]))

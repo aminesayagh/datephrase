@@ -7,7 +7,7 @@ from .models import ColumnRead, Question, TemporalConfigError, TemporalContext
 from .reader import YEAR_FIRST, _parse, _say, read_temporal
 
 ORDERS = ("MDY", "DMY")
-PAIR = re.compile(r"(\d{1,2})\s*[-/.]\s*(\d{1,2})")
+PAIR = re.compile(r"(?<!\d)(\d{1,2})(?:\s*[-/.,]\s*|\s+)(\d{1,2})(?!\d)")  # 01/02, 26.10, "01 02", "1,2"
 SAYS = {"MDY": "month first", "DMY": "day first"}
 
 
