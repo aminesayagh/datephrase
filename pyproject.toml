@@ -3,6 +3,8 @@ name = "temporal-reader"
 version = "0.1.0"
 description = "Read English date phrases into typed, JSON-ready dates, periods and durations, with provenance (a thin layer over dateparser)"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "aminesayagh", email = "aminesayagh1997@gmail.com" }
 ]

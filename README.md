@@ -262,3 +262,7 @@ uv run pytest -q     # 301 passed, 6 xfailed
   - 150 pass.
   - The 6 known gaps above are marked `xfail(strict=True)` with their reason, so a case that starts passing fails the run until the list is updated.
 - **Backend answers are pinned.** A dateparser upgrade that changes an answer fails a test before it reaches your code.
+
+## License
+
+[MIT](LICENSE). The dependencies keep their own licenses: dateparser is BSD-3-Clause, text2num is MIT.
